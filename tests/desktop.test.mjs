@@ -1,0 +1,419 @@
+import assert from 'node:assert/strict'
+import { createServer } from 'node:http'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
+import test from 'node:test'
+import { _electron as electron } from 'playwright'
+
+const executablePath = process.env.LEXN_ELECTRON_BINARY || undefined
+
+async function getState(page) { return page.evaluate(() => window.lexn.getState()) }
+async function active(page) {
+  const state = await getState(page)
+  return state.tabs.find(tab => tab.id === state.workspaces.find(space => space.id === state.workspaceId).activeTab)
+}
+
+async function waitUntil(callback, message, milliseconds = 10000) {
+  const deadline = Date.now() + milliseconds
+  do {
+    const result = await callback()
+    if (result) return result
+    await sleep(100)
+  } while (Date.now() < deadline)
+  assert.fail(message)
+}
+
+async function shellPage(app) {
+  return waitUntil(() => app.context().pages().find(page => page.url() === 'lexn://shell/index.html'),
+    'LexN shell window did not load')
+}
+
+async function go(page, url) {
+  const input = page.getByRole('combobox', { name: 'Address and search' })
+  await input.fill(url)
+  await input.press('Enter')
+}
+
+async function activeView(app) {
+  return app.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    const view = win.contentView.children.find(child => child.webContents && child.webContents !== win.webContents)
+    return view?.webContents.getURL() ?? null
+  })
+}
+
+async function shortcut(app, keyCode, modifiers) {
+  await app.evaluate(({ BrowserWindow }, { keyCode, modifiers }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    const active = win.contentView.children.find(child => child.webContents && child.webContents !== win.webContents)
+    const contents = active?.webContents ?? win.webContents
+    win.focus()
+    contents.focus()
+    contents.sendInputEvent({ type: 'keyDown', keyCode, modifiers })
+    contents.sendInputEvent({ type: 'keyUp', keyCode, modifiers })
+  }, { keyCode, modifiers })
+}
+
+function serve(request, response) {
+  switch (request.url) {
+    case '/download':
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="lexn-smoke.txt"' })
+      response.end('LexN real download\n')
+      break
+    case '/slow':
+      response.writeHead(200, { 'Content-Type': 'application/octet-stream', 'Content-Disposition': 'attachment; filename="lexn-slow.bin"', 'Content-Length': 12000000 })
+      const timer = setInterval(() => response.write(Buffer.alloc(1024)), 30)
+      response.on('close', () => clearInterval(timer))
+      break
+    case '/favicon.ico': response.writeHead(404).end(); break
+    default: {
+      const title = request.url === '/two' ? 'LexN Fixture Two' : 'LexN Fixture One'
+      response.setHeader('Content-Type', 'text/html')
+      response.setHeader('Set-Cookie', 'lexn_fixture=reachable; Path=/; SameSite=Lax')
+      response.end(`<!doctype html><title>${title}</title><body style="background:#def"><h1>${title}</h1>
+        <a href="/two" target="_blank" id="blank">New tab</a> <a href="/download" id="download">Download</a>
+        <a href="/slow" id="slow">Slow download</a></body>`)
+    }
+  }
+}
+
+test('desktop browser renders Chromium pages, downloads files, and restores its SQLite profile', { timeout: 120000 }, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'lexn-desktop-'))
+  await mkdir(join(profile, 'downloads'))
+  const server = createServer(serve)
+  await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
+  const origin = 'http://127.0.0.1:' + server.address().port
+  const env = { ...process.env, LEXN_TEST_PROFILE: profile }
+  let app
+  t.after(async () => {
+    if (app) await app.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(profile, { recursive: true, force: true })
+  })
+  const launch = async () => {
+    app = await electron.launch({ args: ['.'], executablePath, env, timeout: 30000 })
+    const page = await shellPage(app)
+    await page.getByRole('combobox', { name: 'Address and search' }).waitFor()
+    return page
+  }
+  let page = await launch()
+  await page.getByRole('textbox', { name: 'Search the web' }).waitFor()
+  if (process.env.LEXN_SCREENSHOT) await page.screenshot({ path: process.env.LEXN_SCREENSHOT })
+  await app.evaluate(({ session }, fixture) => {
+    session.fromPartition('persist:lexn-web').webRequest.onBeforeRequest(
+      { urls: ['https://www.google.com/search*'] },
+      ({ url }, callback) => {
+        const request = new URL(url)
+        callback(request.searchParams.get('q') === 'local Chromium search' ? { redirectURL: fixture } : {})
+      },
+    )
+  }, origin + '/one')
+  await go(page, 'local Chromium search')
+  const one = await waitUntil(async () => {
+    const tab = await active(page)
+    return tab.title === 'LexN Fixture One' && tab
+  }, 'first page title did not update')
+  assert.equal(await activeView(app), origin + '/one')
+  assert.equal(await page.locator('.toolbar-top').count(), 0)
+  await page.getByRole('button', { name: 'Browser menu' }).click()
+  await page.getByRole('button', { name: 'Show top toolbar' }).click()
+  await page.locator('.toolbar-top').waitFor()
+  const toggleModifier = process.platform === 'darwin' ? 'meta' : 'control'
+  await shortcut(app, 'Y', [toggleModifier, 'shift'])
+  await page.locator('.toolbar-top').waitFor({ state: 'detached' })
+  await shortcut(app, 'L', [toggleModifier])
+  await page.getByRole('dialog', { name: 'Command Bar' }).waitFor()
+  await page.getByRole('dialog').getByRole('combobox').press('Escape')
+  await page.getByRole('dialog', { name: 'Command Bar' }).waitFor({ state: 'detached' })
+  await page.getByRole('button', { name: 'Collapse sidebar' }).click()
+  await page.locator('.spatial-browser.spatial-collapsed').waitFor()
+  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor({ state: 'hidden' })
+  const services = page.getByRole('navigation', { name: 'Browser services' })
+  await services.getByRole('button', { name: 'Bookmarks' }).waitFor()
+  await services.getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+  await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).check()
+  await page.getByRole('button', { name: 'Sidebar is locked open' }).waitFor()
+  await shortcut(app, 'S', [toggleModifier])
+  assert.equal(await page.locator('.spatial-collapsed').count(), 0)
+  await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).uncheck()
+  await page.getByRole('button', { name: 'Expand sidebar' }).click()
+  await page.locator(`[data-tab-id="${one.id}"]`).click()
+  await waitUntil(async () => await activeView(app) === origin + '/one', 'website did not reattach after changing chrome')
+
+  const websiteGlobals = await app.evaluate(({ webContents }, url) => {
+    const tab = webContents.getAllWebContents().find(contents => contents.getURL() === url)
+    return tab.executeJavaScript('[typeof window.lexn, typeof require, typeof process, document.querySelector("h1").textContent, Notification.permission]')
+  }, origin + '/one')
+  assert.deepEqual(websiteGlobals, ['undefined', 'undefined', 'undefined', 'LexN Fixture One', 'denied'])
+  await assert.rejects(page.evaluate(() => window.lexn.command('setSetting', 'engine', 'not-a-search-engine')), /Invalid option/)
+
+  await go(page, origin + '/two')
+  await waitUntil(async () => (await active(page)).title === 'LexN Fixture Two', 'second page did not load')
+  await page.getByRole('button', { name: 'Back', exact: true }).click()
+  await waitUntil(async () => (await active(page)).url === origin + '/one', 'back did not navigate')
+  await page.getByRole('button', { name: 'Forward', exact: true }).click()
+  await waitUntil(async () => (await active(page)).url === origin + '/two', 'forward did not navigate')
+  await page.getByRole('button', { name: 'Bookmark this page' }).click()
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await page.getByRole('button', { name: 'Edit bookmark' }).waitFor()
+
+  await app.evaluate(({ webContents }, url) => {
+    return webContents.getAllWebContents().find(contents => contents.getURL() === url).executeJavaScript('document.getElementById("blank").click()', true)
+  }, origin + '/two')
+  const two = await waitUntil(async () => {
+    const tab = await active(page)
+    return tab.id !== one.id && tab.title === 'LexN Fixture Two' && tab
+  }, 'target=_blank did not create a Chromium tab')
+  await page.locator(`[data-tab-id="${one.id}"]`).click()
+  assert.equal((await active(page)).id, one.id)
+  await page.locator(`[data-tab-id="${two.id}"]`).click()
+  assert.equal(await activeView(app), origin + '/two')
+  await page.locator(`[data-tab-id="${one.id}"]`).click({ button: 'right' })
+  await page.getByRole('button', { name: 'Add to Split View' }).click()
+  await waitUntil(async () => await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].contentView.children.filter(child => child.webContents?.getURL().startsWith('http:')).length) === 2,
+    'two native browsing panes were not attached')
+  await page.getByRole('button', { name: 'Remove LexN Fixture Two from split' }).last().click()
+  await page.locator('.split-view').waitFor({ state: 'detached' })
+  const modifier = process.platform === 'darwin' ? 'meta' : 'control'
+  await shortcut(app, 'T', [modifier])
+  const commandBar = page.getByRole('dialog', { name: 'Command Bar' })
+  await commandBar.getByRole('combobox').fill('New Blank Tab')
+  await commandBar.getByRole('combobox').press('Enter')
+  await waitUntil(async () => (await active(page)).url === 'about:blank', 'new-tab shortcut did not work')
+  await shortcut(app, 'W', [modifier])
+  await waitUntil(async () => (await active(page)).id === two.id, 'close-tab shortcut did not restore the previous tab')
+  await shortcut(app, 'T', [modifier, 'shift'])
+  const reopened = await waitUntil(async () => {
+    const tab = await active(page)
+    return tab.url === 'about:blank' && tab
+  }, 'reopen shortcut did not restore the tab')
+  await page.locator(`[data-tab-id="${reopened.id}"]`).click()
+  await shortcut(app, 'Tab', ['control'])
+  await waitUntil(async () => (await active(page)).id === one.id, 'next-tab shortcut did not cycle tabs')
+
+  await page.getByRole('button', { name: 'Create tab group' }).click()
+  await page.getByRole('textbox', { name: 'Name' }).fill('Reading')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  const reading = await waitUntil(async () => (await getState(page)).groups.find(group => group.name === 'Reading'), 'group was not created')
+  await page.locator(`[data-tab-id="${two.id}"]`).click({ button: 'right' })
+  await page.getByRole('combobox', { name: 'Move tab to group' }).selectOption(reading.id)
+  await waitUntil(async () => (await getState(page)).tabs.some(tab => tab.id === two.id && tab.groupId === reading.id), 'tab was not grouped')
+  await page.locator(`[data-tab-id="${one.id}"]`).click({ button: 'right' })
+  await page.getByRole('button', { name: 'Pin tab', exact: true }).click()
+  await waitUntil(async () => (await getState(page)).tabs.some(tab => tab.id === one.id && tab.pinned === 1), 'tab was not pinned')
+  await waitUntil(async () => await activeView(app) === origin + '/two', 'view did not reattach after context menu')
+
+  await page.getByRole('button', { name: 'Browser menu' }).click()
+  await page.getByRole('button', { name: 'Page assistant' }).click()
+  await page.getByRole('complementary', { name: 'Page assistant' }).waitFor()
+  assert.equal(await activeView(app), origin + '/two')
+  await page.getByRole('button', { name: 'Close assistant' }).click()
+
+  await app.evaluate(({ BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows()[0].contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
+    return view.webContents.executeJavaScript('document.getElementById("download").click()', true)
+  })
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click()
+  await page.getByRole('button', { name: 'Reveal lexn-smoke.txt' }).waitFor()
+  assert.equal(await readFile(join(profile, 'downloads', 'lexn-smoke.txt'), 'utf8'), 'LexN real download\n')
+  assert.equal(await activeView(app), null)
+
+  await page.locator(`[data-tab-id="${one.id}"]`).click()
+  await app.evaluate(({ BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows()[0].contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
+    return view.webContents.executeJavaScript('document.getElementById("slow").click()', true)
+  })
+  await page.getByRole('button', { name: 'Downloads', exact: true }).click()
+  await page.getByRole('button', { name: 'Cancel lexn-slow.bin' }).click()
+  await waitUntil(async () => (await getState(page)).downloads.some(item => item.name === 'lexn-slow.bin' && item.state === 'cancelled'),
+    'Chromium download cancellation was not saved')
+
+  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('button', { name: 'Cookies', exact: true }).click()
+  await page.getByText('lexn_fixture', { exact: true }).waitFor()
+  await page.getByRole('button', { name: 'Remove cookie lexn_fixture' }).click()
+  await page.getByText('No cookies stored').waitFor()
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+  await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('light')
+  await page.locator('.browser.light').waitFor()
+  await page.evaluate(() => window.lexn.command('setPermission', 'https://example.com', 'notifications', 'allow'))
+  const extensionPath = join(profile, 'fixture-extension')
+  await mkdir(extensionPath)
+  await writeFile(join(extensionPath, 'manifest.json'), JSON.stringify({
+    manifest_version: 3, name: 'LexN Fixture Extension', version: '1.0.0', action: { default_popup: 'popup.html' },
+  }))
+  await writeFile(join(extensionPath, 'popup.html'), '<!doctype html><title>LexN Fixture Popup</title><p>Extension popup</p>')
+  await shortcut(app, 'T', [modifier])
+  await commandBar.getByRole('combobox').fill('Extensions')
+  await commandBar.getByRole('combobox').press('Enter')
+  await app.evaluate(({ dialog }, path) => {
+    const original = dialog.showOpenDialog
+    dialog.showOpenDialog = async () => {
+      dialog.showOpenDialog = original
+      return { canceled: false, filePaths: [path] }
+    }
+  }, extensionPath)
+  await page.getByRole('button', { name: 'Load unpacked' }).click()
+  await page.getByText('LexN Fixture Extension', { exact: true }).waitFor()
+  await shortcut(app, 'T', [modifier])
+  await commandBar.getByRole('combobox').fill('LexN Fixture Extension')
+  await commandBar.getByRole('combobox').press('Enter')
+  await waitUntil(async () => app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(win => win.webContents.getURL().startsWith('chrome-extension://'))), 'extension popup did not open')
+  await app.evaluate(({ BrowserWindow }) => {
+    BrowserWindow.getAllWindows().find(win => win.webContents.getURL().startsWith('chrome-extension://')).close()
+  })
+  const preRestartHistory = await page.evaluate(() => window.lexn.history('Fixture Two'))
+  assert.ok(preRestartHistory.length > 0)
+  await page.getByRole('button', { name: 'Add Space or profile' }).click()
+  await page.getByRole('button', { name: 'New profile' }).click()
+  await page.getByRole('textbox', { name: 'Name' }).fill('Research')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await waitUntil(async () => {
+    const state = await getState(page)
+    return state.workspaces.some(space => space.name === 'Research' && space.id === state.workspaceId)
+  }, 'workspace was not created')
+  const isolated = await getState(page)
+  assert.deepEqual(isolated.bookmarks, [])
+  assert.deepEqual(isolated.extensions, [])
+  assert.deepEqual(isolated.passwords, [])
+  assert.deepEqual(isolated.downloads, [])
+  assert.deepEqual(isolated.permissions, [])
+  assert.deepEqual(await page.evaluate(() => window.lexn.cookies()), [])
+  assert.deepEqual(await page.evaluate(() => window.lexn.history('')), [])
+  assert.equal(isolated.favorites.length, 8)
+  await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 105, deltaY: 0 })
+  await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Personal' }, 'horizontal swipe did not advance to Personal')
+  await page.getByRole('button', { name: 'Research', exact: true }).click()
+
+  await go(page, origin + '/one')
+  await waitUntil(async () => (await active(page)).title === 'LexN Fixture One', 'profile navigation failed')
+  await waitUntil(async () => (await page.evaluate(() => window.lexn.cookies())).some(cookie => cookie.name === 'lexn_fixture'), 'profile cookie was not set')
+  await page.getByRole('button', { name: 'Personal', exact: true }).click()
+  assert.deepEqual(await page.evaluate(() => window.lexn.cookies()), [])
+  await page.getByRole('button', { name: 'Research', exact: true }).click()
+  await page.getByRole('button', { name: 'Add Space or profile' }).click()
+  await page.getByRole('button', { name: 'New Space', exact: true }).click()
+  await page.getByRole('textbox', { name: 'Name' }).fill('Second Research Space')
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await waitUntil(async () => {
+    const state = await getState(page)
+    const research = state.workspaces.find(space => space.name === 'Research')
+    return state.workspaces.some(space => space.name === 'Second Research Space' && space.id === state.workspaceId && space.profileId === research?.id)
+  }, 'shared Space did not attach to its selected profile')
+  assert.ok((await page.evaluate(() => window.lexn.cookies())).some(cookie => cookie.name === 'lexn_fixture'))
+  assert.equal((await active(page)).url, 'about:blank')
+  await go(page, origin + '/one')
+  await waitUntil(async () => (await active(page)).title === 'LexN Fixture One', 'shared-space navigation failed')
+  await page.getByRole('button', { name: 'Clear', exact: true }).click()
+  await page.getByRole('button', { name: 'Archived tabs' }).click()
+  await page.locator('.record-link').filter({ hasText: 'LexN Fixture One' }).click()
+  await waitUntil(async () => (await active(page)).url === origin + '/one', 'could not restore archived tab')
+  await page.getByRole('button', { name: 'Research', exact: true }).click()
+
+  await page.getByRole('button', { name: 'Browser menu' }).click()
+  await page.getByRole('button', { name: 'Show top toolbar' }).click()
+  await page.locator('.toolbar-top').waitFor()
+  const exitCode = new Promise(resolve => app.process().once('exit', resolve))
+  await app.close()
+  assert.equal(await exitCode, 0)
+  app = undefined
+  page = await launch()
+  assert.equal((await active(page)).url, origin + '/one')
+  assert.equal((await getState(page)).settings.theme, 'light')
+  await page.locator('.toolbar-top').waitFor()
+  await page.getByRole('button', { name: 'Personal', exact: true }).click()
+  const postRestartHistory = await page.evaluate(() => window.lexn.history('Fixture Two'))
+  assert.ok(postRestartHistory.some(visit => preRestartHistory.some(previous => previous.id === visit.id)))
+  const restored = await getState(page)
+  assert.ok(restored.tabs.some(tab => tab.id === two.id && tab.url === origin + '/two' && tab.groupId === reading.id))
+  assert.ok(restored.tabs.some(tab => tab.id === one.id && tab.pinned === 1))
+  await page.locator(`[data-tab-id="${two.id}"]`).click()
+  await waitUntil(async () => await activeView(app) === origin + '/two', 'workspace tab was not reattached')
+  await page.getByRole('navigation', { name: 'Browser services' }).getByRole('button', { name: 'Bookmarks', exact: true }).click()
+  await page.locator('.record-link').filter({ hasText: 'LexN Fixture Two' }).waitFor()
+  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await page.getByRole('searchbox', { name: 'Search history' }).fill('Fixture Two')
+  await page.locator('.record-link').filter({ hasText: 'LexN Fixture Two' }).first().waitFor()
+
+  await waitUntil(async () => (await getState(page)).extensions.some(extension => extension.name === 'LexN Fixture Extension'),
+    'extension did not reload on restart')
+  await page.locator(`[data-tab-id="${one.id}"]`).click()
+  await waitUntil(async () => await activeView(app) === origin + '/two', 'pinned tab did not attach')
+  await app.evaluate(({ BrowserWindow }) => {
+    const root = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().startsWith('lexn://'))
+    return root.contentView.children.find(child => child.webContents?.getURL().startsWith('http:')).webContents
+      .executeJavaScript('document.getElementById("blank").click()', true)
+  })
+  await waitUntil(async () => app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(win => win.isModal() && win.webContents.getURL().startsWith('http:') && !win.webContents.isLoading())), 'pinned link did not open a peek window')
+  await app.evaluate(({ BrowserWindow }) => {
+    const view = BrowserWindow.getAllWindows().find(win => win.isModal() && win.webContents.getURL().startsWith('http:'))
+    view.focus()
+    view.webContents.focus()
+    view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] })
+  })
+  await waitUntil(async () => (await active(page)).id !== one.id, 'peek was not promoted to a full tab')
+
+  const extraPanes = []
+  for (let index = 1; index <= 3; index++) {
+    const url = origin + '/pane-' + index
+    await page.evaluate(address => window.lexn.command('newTab', address), url)
+    extraPanes.push((await active(page)).id)
+  }
+  await page.locator(`[data-tab-id="${one.id}"]`).click()
+  for (const id of extraPanes) {
+    await page.locator(`[data-tab-id="${id}"]`).click({ button: 'right' })
+    await page.getByRole('button', { name: 'Add to Split View' }).click()
+  }
+  await waitUntil(async () => await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].contentView.children.filter(child => child.webContents?.getURL().startsWith('http:')).length) === 4,
+    'four native browsing panes were not attached')
+  const divider = await page.getByRole('button', { name: 'Resize split panes' }).first().boundingBox()
+  const before = (await page.locator('.split-pane').first().boundingBox()).width
+  await page.mouse.move(divider.x + divider.width / 2, divider.y + 55)
+  await page.mouse.down()
+  await page.mouse.move(divider.x + 35, divider.y + 55, { steps: 4 })
+  await page.mouse.up()
+  await waitUntil(async () => (await page.locator('.split-pane').first().boundingBox()).width > before + 15,
+    'dragging the divider did not resize the split panes')
+})
+
+test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LEXN_TEST_PUBLIC_WEB, timeout: 90000 }, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'lexn-public-'))
+  let app
+  t.after(async () => {
+    if (app) await app.close().catch(() => {})
+    await rm(profile, { recursive: true, force: true })
+  })
+  app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
+  const page = await shellPage(app)
+  for (const [input, host, path] of [['google.com', /google\./, /^\/$/], ['Chromium browser', /google\./, /^\/search/], ['youtube.com', /youtube\.com/, /^\/$/]]) {
+    await t.test(input, async subtest => {
+      await go(page, input)
+      let tab
+      try {
+        await waitUntil(async () => {
+          tab = await active(page)
+          if (!tab?.url.startsWith('https://') || tab.loading || tab.error) return false
+          const url = new URL(tab.url)
+          if (input === 'Chromium browser' && host.test(url.hostname) && url.pathname.startsWith('/sorry/')) {
+            const requested = url.searchParams.get('continue')
+            if (requested && new URL(requested).searchParams.get('q') === input) {
+              subtest.skip('Google redirected the correct search request to its verification page.')
+              return true
+            }
+          }
+          return host.test(url.hostname) && path.test(url.pathname) && tab.title !== url.hostname
+        }, 'Public page did not finish loading', 22000)
+      } catch (error) {
+        throw new Error(`${error.message} (${tab?.url ? new URL(tab.url).origin + new URL(tab.url).pathname : 'no URL'}: ${tab?.error || 'page did not match'})`, { cause: error })
+      }
+    })
+  }
+})

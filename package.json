@@ -1,0 +1,96 @@
+{
+  "name": "lexn-browser",
+  "productName": "LexN Browser",
+  "version": "0.3.1",
+  "description": "A workspace-oriented desktop browser",
+  "author": "LexN Browser contributors",
+  "private": true,
+  "type": "module",
+  "main": "out/electron/main/index.js",
+  "engines": {
+    "node": ">=24.15.0"
+  },
+  "scripts": {
+    "dev": "npm run build && electron .",
+    "start": "electron .",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.main.json --noEmit",
+    "lint": "eslint .",
+    "build": "tsc -p tsconfig.main.json && vite build",
+    "test": "npm run build && node --test tests/unit.test.mjs",
+    "test:desktop": "node --test tests/desktop.test.mjs",
+    "dist:mac": "npm run build && electron-builder --mac --arm64 --x64",
+    "dist:win": "npm run build && electron-builder --win --x64",
+    "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64"
+  },
+  "dependencies": {
+    "lucide-react": "1.48.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zustand": "5.0.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.1",
+    "@types/node": "26.4.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.3.0",
+    "electron": "45.4.1",
+    "electron-builder": "26.18.0",
+    "eslint": "9.39.5",
+    "playwright": "1.62.1",
+    "tailwindcss": "4.3.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.71.0",
+    "vite": "8.3.8"
+  },
+  "build": {
+    "appId": "com.lexn.browser",
+    "artifactName": "LexN-${version}-${arch}.${ext}",
+    "files": [
+      "out/**",
+      "dist/**",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release/${version}"
+    },
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "icon": "build/icon.png",
+      "extendInfo": {
+        "NSCameraUsageDescription": "Allows camera use on websites you approve in LexN.",
+        "NSMicrophoneUsageDescription": "Allows microphone use on websites you approve in LexN.",
+        "CFBundleURLTypes": [
+          {
+            "CFBundleURLName": "Web links",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "CFBundleURLSchemes": [
+              "http",
+              "https"
+            ]
+          }
+        ]
+      },
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "minimumSystemVersion": "13.0"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "artifactName": "LexN-Setup-${version}-${arch}.${ext}"
+    }
+  }
+}
