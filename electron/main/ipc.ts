@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { app, clipboard, dialog, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, dialog, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
@@ -7,7 +7,8 @@ import type { Database } from './database.js'
 import type { FloatingSidebar } from './floatingSidebar.js'
 import type { Tabs } from './tabs.js'
 import { showExtension } from './extensions.js'
-import { detectSources, exportedLinks, passwordRows, readChromium, readImportFile, saveImported } from './importData.js'
+import { detectSources, exportedLinks, readChromium, readImportFile, saveImported } from './importData.js'
+import { copyPassword, importPasswords, savePassword } from './vault.js'
 import type { Downloads } from './profile.js'
 
 export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow, otherWindowTabs: Tab[]): BrowserState {
@@ -21,6 +22,7 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads, win
       favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id) }] as const
   }))
   return {
+    appVersion: app.getVersion(),
     welcomePending: db.get('welcomePending', false),
     windowMaximized: window.isMaximized(),
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
@@ -119,27 +121,13 @@ export function bindIpc(
     saveLogin: async (value, user, password) => {
       const profile = tabs.profileId
       const origin = originOf(site(value))!
-      const username = text(user, 256)
-      if (typeof password !== 'string' || !password || password.length > 4096) throw new Error('Invalid password.')
-      if (process.platform === 'linux' || !await safeStorage.isAsyncEncryptionAvailable()) throw new Error('System encryption is unavailable.')
-      const encrypted = (await safeStorage.encryptStringAsync(password)).toString('base64')
-      if (window.isDestroyed()) return
-      db.run('INSERT INTO saved_logins VALUES (?, ?, ?, ?, ?) ON CONFLICT(profileId, origin, username) DO UPDATE SET encrypted = excluded.encrypted',
-        randomUUID(), profile, origin, username, encrypted)
+      if (typeof user !== 'string' || user.length > 256 || user.includes('\0')) throw new Error('Invalid username.')
+      if (typeof password !== 'string' || !password || password.length > 4096 || password.includes('\0')) throw new Error('Invalid password.')
+      await savePassword(db, { profile, origin, username: user }, password, () => !window.isDestroyed())
     },
     copyLogin: async value => {
       const profile = tabs.profileId
-      const row = db.one<{ encrypted: string }>('SELECT encrypted FROM saved_logins WHERE id = ? AND profileId = ?', id(value), profile)
-      if (!row) throw new Error('Password was not found in this Profile.')
-      const data = Buffer.from(row.encrypted, 'base64')
-      let decrypted = await safeStorage.decryptStringAsync(data)
-      if (decrypted.shouldReEncrypt) {
-        decrypted = await safeStorage.decryptStringAsync(data)
-        const encrypted = (await safeStorage.encryptStringAsync(decrypted.result)).toString('base64')
-        if (window.isDestroyed()) return
-        db.run('UPDATE saved_logins SET encrypted = ? WHERE id = ? AND profileId = ? AND encrypted = ?', encrypted, id(value), profile, row.encrypted)
-      }
-      if (!window.isDestroyed() && tabs.profileId === profile) clipboard.writeText(decrypted.result)
+      await copyPassword(db, profile, id(value), () => !window.isDestroyed() && window.isFocused() && tabs.profileId === profile)
     },
     removeLogin: value => { db.run('DELETE FROM saved_logins WHERE id = ? AND profileId = ?', id(value), tabs.profileId) },
     loadExtension: async () => {
@@ -249,7 +237,7 @@ export function bindIpc(
     addFolder: name => { db.run('INSERT INTO bookmark_folders VALUES (?, ?, ?)', randomUUID(), required(name, 64), tabs.profileId) },
     deleteFolder: value => { db.run('DELETE FROM bookmark_folders WHERE id = ? AND workspaceId = ?', id(value), tabs.profileId) },
     deleteVisit: value => { db.run('DELETE FROM history WHERE id = ? AND workspaceId = ?', id(value), tabs.profileId) },
-    download: (value, action) => downloads.action(tabs.profileId, id(value), choice(action, ['open', 'reveal', 'cancel'])),
+    download: (value, action) => downloads.action(tabs.profileId, id(value), choice(action, ['open', 'reveal', 'cancel']), window),
     setSetting: (key, value) => {
       const profile = tabs.profileId
       switch (key) {
@@ -384,6 +372,7 @@ export function bindIpc(
       path = source.path
     } else {
       const result = await dialog.showOpenDialog(window, {
+        title: kind === 'passwords' ? 'Import saved accounts into Drew' : undefined,
         properties: [kind === 'folder' ? 'openDirectory' : 'openFile'],
         filters: kind === 'bookmarks' ? [{ name: 'Browser exports', extensions: ['html', 'htm', 'md'] }]
           : kind === 'passwords' ? [{ name: 'Passwords CSV', extensions: ['csv'] }] : undefined,
@@ -392,21 +381,10 @@ export function bindIpc(
       path = result.filePaths[0]
     }
     if (kind === 'passwords') {
-      if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('System encryption is unavailable.')
-      const rows = passwordRows(await readImportFile(path))
-      const logins: { origin: string; username: string; encrypted: string }[] = []
-      for (const { origin, username, password } of rows) {
-        if (window.isDestroyed()) return null
-        if (db.one('SELECT id FROM saved_logins WHERE profileId = ? AND origin = ? AND username = ?', profile, origin, username)) continue
-        logins.push({ origin, username, encrypted: (await safeStorage.encryptStringAsync(password)).toString('base64') })
-      }
-      if (window.isDestroyed()) return null
-      const passwords = db.transaction(() => logins.reduce((count, row) => count + Number(db.run(
-        'INSERT INTO saved_logins VALUES (?, ?, ?, ?, ?) ON CONFLICT(profileId, origin, username) DO NOTHING',
-        randomUUID(), profile, row.origin, row.username, row.encrypted,
-      ).changes), 0))
+      const imported = await importPasswords(db, profile, path, () => !window.isDestroyed())
+      if (!imported) return null
       changed()
-      return { bookmarks: 0, visits: 0, passwords, notes: [] }
+      return { bookmarks: 0, visits: 0, ...imported }
     }
     const imported = kind === 'bookmarks'
       ? { links: exportedLinks(await readImportFile(path), /\.md$/i.test(path)), history: [], notes: [] }

@@ -25,7 +25,7 @@ const isolatedProfile = app.commandLine.getSwitchValue('user-data-dir')
 const testProfile = !app.isPackaged ? process.env.LEXN_TEST_PROFILE : undefined
 const override = testProfile ?? (isAbsolute(isolatedProfile) ? isolatedProfile : undefined)
 const profilePath = override ?? join(app.getPath('appData'), legacyProfileName)
-mkdirSync(profilePath, { recursive: true })
+mkdirSync(profilePath, { recursive: true, mode: 0o700 })
 app.setPath('userData', profilePath)
 if (testProfile) app.setPath('downloads', join(testProfile, 'downloads'))
 if (process.platform === 'win32') app.setAppUserModelId('com.lexn.browser')
@@ -277,7 +277,13 @@ if (!app.requestSingleInstanceLock()) {
       const type = mimeTypes[extname(pathname)]
       try {
         const body = await readFile(join(app.getAppPath(), 'dist', pathname.slice(1)))
-        return new Response(body, { headers: { 'Content-Type': type, 'X-Content-Type-Options': 'nosniff' } })
+        return new Response(body, { headers: {
+          'Content-Type': type,
+          'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer',
+          'Content-Security-Policy': "frame-ancestors 'none'",
+          'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), display-capture=(), usb=(), serial=()',
+        } })
       } catch {
         return new Response(null, { status: 404 })
       }

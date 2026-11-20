@@ -85,6 +85,7 @@ export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords'
 export interface ProfileExtension { id: string; name: string; version: string; popup: boolean }
 export interface SavedLogin { id: string; origin: string; username: string }
 export interface BrowserState {
+  appVersion: string
   welcomePending: boolean
   windowMaximized: boolean
   passwords: SavedLogin[];
@@ -155,7 +156,6 @@ export interface SpaceScroll {
 }
 export interface Bridge {
   platform: string
-  version: string
   getState(): Promise<BrowserState>
   command<K extends keyof Commands>(name: K, ...args: Commands[K]): Promise<void>
   history(query: string): Promise<Visit[]>

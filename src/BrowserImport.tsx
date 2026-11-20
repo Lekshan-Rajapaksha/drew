@@ -85,9 +85,15 @@ export function BrowserImport({ profile }: { profile: string }) {
     <div className="import-file-actions">
       <button type="button" className="secondary" disabled={busy} onClick={() => { void run('folder') }}><FolderOpen size={16} />Choose Profile folder</button>
       <button type="button" className="secondary" disabled={busy} onClick={() => { void run('bookmarks') }}><FileText size={16} />Import links file</button>
-      <button type="button" className="secondary" disabled={busy} onClick={() => { void run('passwords') }}><KeyRound size={16} />Import password CSV</button>
     </div>
-    <p className="muted import-file-note">Links files can be bookmarks HTML or Markdown. Passwords from CSV are saved using system encryption.</p>
+    <p className="muted import-file-note">Links files can be bookmarks HTML or Markdown.</p>
+    <div className="import-source-panel">
+      <div className="setting">
+        <div><strong>Saved passwords from {brand}</strong><p>Export passwords from your browser’s password manager, then choose the CSV. Drew saves each website and username separately in <strong>{profile}</strong> using system encryption.</p></div>
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('passwords') }}><KeyRound size={16} />Import password CSV</button>
+      </div>
+      <p className="import-guide">The exported CSV contains readable passwords. Delete the export when you finish importing it.</p>
+    </div>
     {busy && <p role="status">Importing…</p>}
     {status && <p role="status" className="import-status">{status}</p>}
   </section>

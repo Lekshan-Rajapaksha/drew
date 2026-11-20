@@ -17,6 +17,7 @@ export function Passwords({ entries }: { entries: SavedLogin[] }) {
       const form = event.currentTarget
       const secret = new FormData(form).get('secret')
       if (typeof secret !== 'string' || !secret) return
+      form.reset()
       setSaving(true)
       void command('saveLogin', website, username, secret).then(ok => {
         if (ok) { form.reset(); setWebsite(''); setUsername(''); setNotice('Password saved.') }
@@ -32,8 +33,8 @@ export function Passwords({ entries }: { entries: SavedLogin[] }) {
     <div className="records">{entries.map(entry => <article key={entry.id} className="record">
       <div className="record-link"><strong>{entry.origin}</strong><span>{entry.username}</span></div>
       <button type="button" className="secondary" onClick={() => {
-        void command('copyLogin', entry.id).then(ok => { if (ok) setNotice('Password copied.') })
-      }}>Copy password</button>
+        void command('copyLogin', entry.id).then(ok => { if (ok) setNotice('Password copied. Drew clears it from the clipboard after 30 seconds if it is still there.') })
+      }} aria-label={`Copy password for ${entry.username || 'unnamed account'} at ${entry.origin}`}>Copy password</button>
       <button type="button" className="secondary" onClick={() => {
         void command('removeLogin', entry.id).then(ok => { if (ok) setNotice('Password removed.') })
       }}>Remove</button>

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
@@ -13,13 +14,21 @@ type Source = BrowserImportSource & { path: string }
 const maxFileSize = 16 * 1024 * 1024
 
 export async function readImportFile(path: string) {
-  const file = await open(path)
+  const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   try {
     const info = await file.stat()
     if (!info.isFile() || info.size > maxFileSize) throw new Error('Choose an export file smaller than 16 MB.')
     const data = Buffer.alloc(info.size)
-    const { bytesRead } = await file.read(data, 0, data.length, 0)
-    return data.subarray(0, bytesRead).toString('utf8').replace(/^\uFEFF/, '')
+    let length = 0
+    while (length < data.length) {
+      const { bytesRead } = await file.read(data, length, data.length - length, length)
+      if (!bytesRead) break
+      length += bytesRead
+    }
+    if ((await file.stat()).size !== info.size || length !== info.size) throw new Error('The file changed during import. Export it again and retry.')
+    try { return new TextDecoder('utf-8', { fatal: true }).decode(data) }
+    catch { throw new Error('Use a UTF-8 browser export file.') }
+    finally { data.fill(0) }
   } finally { await file.close() }
 }
 
@@ -140,6 +149,7 @@ export async function detectSources(): Promise<Source[]> {
 function chromiumHistory(path: string): Entry[] {
   const source = new DatabaseSync(path, { readOnly: true })
   try {
+    source.exec('PRAGMA trusted_schema = OFF; PRAGMA query_only = ON;')
     const rows = source.prepare('SELECT url, title, last_visit_time / 1000 AS visit_millis FROM urls ORDER BY last_visit_time DESC LIMIT 5000').all() as
       { url: string; title: string | null; visit_millis: number | null }[]
     return rows.flatMap(row => {
@@ -194,29 +204,38 @@ export function saveImported(db: Database, profile: string, links: Link[], histo
 
 export function passwordRows(csv: string) {
   const rows: string[][] = []
-  let record: string[] = [], cell = '', quoted = false
+  let record: string[] = [], cell = '', quoted = false, fieldClosed = false
   for (let i = 0; i < csv.length; i++) {
     const char = csv[i]
     if (quoted) {
       if (char === '"' && csv[i + 1] === '"') { cell += '"'; i++ }
-      else if (char === '"') quoted = false
+      else if (char === '"') { quoted = false; fieldClosed = true }
       else cell += char
-    } else if (char === '"' && !cell) quoted = true
-    else if (char === ',') { record.push(cell); cell = '' }
+    } else if (char === ',') { record.push(cell); cell = ''; fieldClosed = false }
     else if (char === '\r' || char === '\n') {
       if (char === '\r' && csv[i + 1] === '\n') i++
-      rows.push([...record, cell]); record = []; cell = ''
-    } else cell += char
+      rows.push([...record, cell]); record = []; cell = ''; fieldClosed = false
+    } else {
+      if (fieldClosed || (char === '"' && cell)) throw new Error('The password CSV contains a malformed quoted field.')
+      if (char === '"') quoted = true
+      else cell += char
+    }
   }
   if (quoted) throw new Error('The password CSV has an incomplete quoted field.')
   if (cell || record.length) rows.push([...record, cell])
   const header = rows.shift()?.map(field => field.trim().toLowerCase()) ?? []
   const positions = ['url', 'username', 'password'].map(field => header.indexOf(field))
   if (positions.includes(-1)) throw new Error('Choose a password CSV with URL, username, and password columns.')
-  return rows.slice(0, 5000).flatMap(row => {
+  let skipped = 0
+  const entries = rows.flatMap(row => {
+    if (row.length === 1 && !row[0].trim()) return []
     const [url, username, password] = positions.map(index => row[index])
     const origin = url && originOf(url)
-    return origin && username !== undefined && username.length <= 256 && password && password.length <= 4096
-      ? [{ origin, username, password }] : []
+    if (origin && username !== undefined && username.length <= 256 && password && password.length <= 4096 && !username.includes('\0') && !password.includes('\0')) {
+      return [{ origin, username, password }]
+    }
+    skipped++
+    return []
   })
+  return { entries, skipped }
 }

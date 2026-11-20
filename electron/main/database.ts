@@ -1,5 +1,6 @@
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
+import { closeSync, constants, fchmodSync, openSync } from 'node:fs'
 import { accents, defaultSettings, type Settings, type Visit } from '../../shared/model.js'
 
 const starterFavorites = [
@@ -142,9 +143,14 @@ export class Database {
   private db: DatabaseSync
 
   constructor(path: string) {
+    if (process.platform !== 'win32' && path !== ':memory:') {
+      const handle = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_NOFOLLOW, 0o600)
+      try { fchmodSync(handle, 0o600) }
+      finally { closeSync(handle) }
+    }
     this.db = new DatabaseSync(path)
     try {
-      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2500;')
+      this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2500; PRAGMA trusted_schema = OFF; PRAGMA secure_delete = ON;')
       const version = this.one<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0
       if (version > migrations.length) throw new Error('This profile requires a newer version of Drew.')
       for (let index = version; index < migrations.length; index++) {

@@ -252,7 +252,7 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
         </article>)}</div>
     </>}
     {section === 'About' && <div className="setting-list">
-      <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {window.lexn.version}</span></Setting>
+      <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {browser.appVersion}</span></Setting>
       <Setting label="Default browser" detail="Use your operating system’s default apps settings to choose its web browser. OS registration varies by installer." />
       <Setting label="Local profile" detail="Browsing data is stored on this device. Each browser profile keeps separate logins, history, bookmarks, downloads and permissions." />
     </div>}

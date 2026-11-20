@@ -42,6 +42,17 @@ Profiles own site storage, history, bookmarks, downloads, permissions, saved pas
 
 Settings includes a Notifications section with per-site rules and a block-all option, and a Keyboard Shortcuts section for editing Profile-specific bindings.
 
+
+### Password import and release security
+
+In **Settings → Import**, choose the source browser and then choose its password CSV export. Drew saves one entry per destination Profile, website origin, and exact username. Multiple accounts for a site remain separate, and imports retain existing passwords for matching accounts. Browser password exports are plaintext files and remain in the location you chose until you delete them. Passkeys, session tokens, payment data, and the source browser's private vault are outside the password CSV format Drew imports.
+
+Drew encrypts passwords with Electron's OS-backed storage. The encrypted record binds the password to its Profile and account. macOS uses Keychain and Windows uses DPAPI. Windows DPAPI protects against other OS users. Software already running as the same Windows user can have access to that user's DPAPI material. Drew never stores the selected export or sends imported password values to the interface. Copies go to the system clipboard in the focused Profile window and are cleared after 30 seconds if still present while Drew is running. OS clipboard history and other clipboard readers have their own retention.
+
+Packaged builds require the integrity-checked app archive, disable Node configuration and inspector flags, and encrypt Chromium cookies on write. Browsing history, URLs, bookmarks, download paths, and password account labels are separate local metadata. The password vault does not provide full disk encryption. Keep previous-version installers separate from the upgraded Profile because previous versions may be unable to read newly encrypted cookies.
+
+Run `npm run release:signed` from the target OS with production signing configured. This runs the dependency audit and tests, requires a successful signature, and verifies Developer ID and notarization on macOS or timestamped Authenticode on Windows. The verification output is under `release/<version>/distribution`. Local builds can be used for testing. They require release signing, native installer testing, and release-channel review before external distribution.
+
 ## Architecture
 
 | Location | Responsibility |

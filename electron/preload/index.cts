@@ -3,7 +3,6 @@ import type { Bridge, BrowserState, SpaceScroll, Shortcut } from '../../shared/m
 
 const bridge: Bridge = {
   platform: process.platform,
-  version: '0.5.7',
   getState: () => ipcRenderer.invoke('lexn:state'),
   command: (name, ...args) => ipcRenderer.invoke('lexn:command', name, args),
   history: query => ipcRenderer.invoke('lexn:history', query),

@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import test from 'node:test'
+import { DatabaseSync } from 'node:sqlite'
 import { _electron as electron } from 'playwright'
 
 const executablePath = process.env.LEXN_ELECTRON_BINARY || undefined
@@ -732,6 +734,74 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 60, deltaY: 0 })
   await page.getByRole('button', { name: 'Work favorite', exact: true }).waitFor()
   assert.equal((await getState(page)).workspaceId, personal.workspaces[1].id)
+})
+
+test('password imports keep each account in its Profile and reject reassigned encrypted records', {
+  skip: !['darwin', 'win32'].includes(process.platform), timeout: 60000,
+}, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'drew-password-import-'))
+  const app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
+  const dbPath = join(profile, 'lexn.sqlite')
+  t.after(async () => {
+    await app.close().catch(() => {})
+    await rm(profile, { recursive: true, force: true })
+  })
+  const page = await shellPage(app)
+  await page.getByRole('dialog').getByRole('button', { name: 'Import browser data' }).click()
+  const csv = join(profile, 'passwords.csv')
+  await writeFile(csv, 'name,url,username,password\r\nFirst,https://example.org/login,alice,fixture-a\r\nSecond,https://example.org,alice,fixture-duplicate\r\nThird,https://example.org,bob,"fixture,b"\r\nInvalid,file:///invalid,local,fixture-c\r\n')
+  await app.evaluate(({ safeStorage, dialog, clipboard }, file) => {
+    const protectedValues = new Map([['legacy-fixture', 'fixture-legacy-password']])
+    let clipboardValue = ''
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async value => {
+      const handle = 'test-sealed-' + protectedValues.size
+      protectedValues.set(handle, value)
+      return Buffer.from(handle)
+    }
+    safeStorage.decryptStringAsync = async value => ({ result: protectedValues.get(value.toString()), shouldReEncrypt: false })
+    clipboard.writeText = async value => { clipboardValue = value }
+    clipboard.readText = async () => clipboardValue
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+  }, csv)
+  const picker = page.getByRole('button', { name: 'Import password CSV' })
+  await picker.click()
+  await page.getByText(/Imported 2 passwords into Personal.*1 matching account.*1 invalid or unsupported row/).waitFor()
+  let state = await getState(page)
+  const [alice, bob] = state.passwords
+  assert.equal(alice.username, 'alice')
+  assert.equal(bob.username, 'bob')
+  assert.equal(alice.origin, bob.origin)
+  assert.deepEqual(Object.keys(alice).sort(), ['id', 'origin', 'username'])
+  await picker.click()
+  await page.getByText(/3 matching accounts were kept as saved/).waitFor()
+  const db = new DatabaseSync(dbPath)
+  try {
+    const aliceBlob = db.prepare('SELECT encrypted FROM saved_logins WHERE id = ?').get(alice.id).encrypted
+    const bobBlob = db.prepare('SELECT encrypted FROM saved_logins WHERE id = ?').get(bob.id).encrypted
+    assert.match(aliceBlob, /^account-v1:/)
+    assert.notEqual(aliceBlob, bobBlob)
+    assert.ok(!(await readFile(dbPath)).includes('fixture-a'))
+    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus())
+    await page.evaluate(id => window.lexn.command('copyLogin', id), alice.id)
+    assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'fixture-a')
+    db.prepare('UPDATE saved_logins SET encrypted = ? WHERE id = ?').run(aliceBlob, bob.id)
+    await assert.rejects(page.evaluate(id => window.lexn.command('copyLogin', id), bob.id), /could not unlock/)
+    db.prepare('UPDATE saved_logins SET encrypted = ? WHERE id = ?').run(aliceBlob.split(':')[1], bob.id)
+    await assert.rejects(page.evaluate(id => window.lexn.command('copyLogin', id), bob.id), /could not unlock/)
+    const oldBlob = Buffer.from('legacy-fixture').toString('base64')
+    const legacyId = randomUUID()
+    db.prepare('INSERT INTO saved_logins VALUES (?, ?, ?, ?, ?)').run(legacyId, state.profileId, 'https://legacy.example', 'legacy', oldBlob)
+    await page.evaluate(id => window.lexn.command('copyLogin', id), legacyId)
+    assert.match(db.prepare('SELECT encrypted FROM saved_logins WHERE id = ?').get(legacyId).encrypted, /^account-v1:/)
+    await page.evaluate(id => window.lexn.command('workspace', id), state.workspaces[1].id)
+    assert.deepEqual((await getState(page)).passwords, [])
+    await assert.rejects(page.evaluate(id => window.lexn.command('copyLogin', id), alice.id), /not found in this Profile/)
+    await page.evaluate(() => window.lexn.importBrowserData('passwords'))
+    state = await getState(page)
+    assert.equal(state.passwords.length, 2)
+    assert.notEqual(state.passwords[0].id, alice.id)
+  } finally { db.close() }
 })
 
 test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LEXN_TEST_PUBLIC_WEB, timeout: 90000 }, async t => {

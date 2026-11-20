@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { promisify } from 'node:util'
+import { DatabaseSync } from 'node:sqlite'
 import { _electron as electron } from 'playwright'
 
 const executable = process.argv[2]
@@ -120,7 +121,8 @@ try {
   if (previousExecutable) {
     await app.close()
     app = undefined
-    const upgradeArgs = ['--user-data-dir=' + await mkdtemp(join(profile, 'upgrade-'))]
+    const upgradeProfile = await mkdtemp(join(profile, 'upgrade-'))
+    const upgradeArgs = ['--user-data-dir=' + upgradeProfile]
     server = createServer((_request, response) => {
       response.setHeader('Content-Type', 'text/html')
       response.end('<!doctype html><title>Reading List</title><h1>Reading List</h1>')
@@ -148,12 +150,41 @@ try {
       await window.lexn.command('setSetting', 'theme', 'light')
       await window.lexn.command('newTab', url)
     }, url)
+    if (process.env.DREW_VERIFY_ENCRYPTED_COOKIES) {
+      await app.evaluate(async ({ session }) => {
+        const cookies = session.fromPartition('persist:lexn-web').cookies
+        await cookies.set({ url: 'https://cookie-fixture.example', name: 'drew_upgrade_cookie', value: 'upgrade-value',
+          expirationDate: Date.now() / 1000 + 3600 })
+        await cookies.flushStore()
+      })
+    }
     await waitFor(async () => (await oldShell.evaluate(() => window.lexn.history('Reading List'))).length > 0,
       'LexN did not record the reading test visit.')
     await oldShell.evaluate(() => window.lexn.command('newTab'))
     await app.close()
     app = await electron.launch({ executablePath, args: upgradeArgs })
     const home = await showShell()
+    if (process.env.DREW_VERIFY_ENCRYPTED_COOKIES) {
+      const cookie = await app.evaluate(async ({ session }) => {
+        const cookies = session.fromPartition('persist:lexn-web').cookies
+        const [restored] = await cookies.get({ name: 'drew_upgrade_cookie' })
+        await cookies.set({ url: 'https://cookie-fixture.example', name: 'drew_current_cookie', value: 'current-value',
+          expirationDate: Date.now() / 1000 + 3600 })
+        await cookies.flushStore()
+        return restored?.value
+      })
+      assert.equal(cookie, 'upgrade-value')
+      const database = (await readdir(upgradeProfile, { recursive: true, withFileTypes: true }))
+        .find(item => item.name === 'Cookies' && item.isFile() && item.parentPath.includes('lexn-web'))
+      assert.ok(database, 'The Profile’s Chromium cookie store was missing.')
+      const store = new DatabaseSync(join(database.parentPath, database.name), { readOnly: true })
+      try {
+        const saved = store.prepare("SELECT value, length(encrypted_value) AS bytes FROM cookies WHERE name = 'drew_current_cookie'").get()
+        assert.equal(saved?.value, '')
+        assert.ok(saved.bytes > 0, 'The new cookie was not encrypted on disk.')
+      } finally { store.close() }
+      console.log('The previous cookie survived the upgrade, and the new cookie was encrypted on disk.')
+    }
     await home.getByRole('heading', { name: 'Drew' }).waitFor()
     await home.getByRole('region', { name: 'Recent activity' }).getByText('Reading List').waitFor()
     const state = await home.evaluate(() => window.lexn.getState())

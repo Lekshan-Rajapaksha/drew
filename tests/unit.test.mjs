@@ -42,7 +42,11 @@ test('browser imports preserve folders and timestamps, ignore duplicates, and st
   assert.deepEqual(exportedLinks('<DL><H3>News &amp; Reading</H3><DL><A HREF="https://example.org/?q=1&amp;a=2">Saved</A></DL></DL>'),
     [{ url: 'https://example.org/?q=1&a=2', title: 'Saved', folder: 'News & Reading' }])
   assert.deepEqual(passwordRows('name,url,username,password\r\nFixture,https://example.org/path,"a,b","c""d"\r\n'),
-    [{ origin: 'https://example.org', username: 'a,b', password: 'c"d' }])
+    { entries: [{ origin: 'https://example.org', username: 'a,b', password: 'c"d' }], skipped: 0 })
+  assert.deepEqual(passwordRows('url,username,password\nhttps://example.org, alice ,secret\nfile:///local,x,bad\n\n'),
+    { entries: [{ origin: 'https://example.org', username: ' alice ', password: 'secret' }], skipped: 1 })
+  assert.equal(passwordRows('url,username,password\n' + 'https://example.org,user,password\n'.repeat(5001)).entries.length, 5001)
+  assert.throws(() => passwordRows('url,username,password\nhttps://example.org,user,"secret"extra\n'), /malformed quoted field/)
 })
 
 test('address input navigates to web URLs or uses the selected search engine', () => {

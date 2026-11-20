@@ -1,11 +1,13 @@
 import { randomUUID } from 'node:crypto'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, statSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { app, Notification, session, shell, type DownloadItem, type Session } from 'electron'
+import { app, dialog, Notification, session, shell, type BrowserWindow, type DownloadItem, type Session } from 'electron'
 import type { Download, Permission } from '../../shared/model.js'
 import { originOf } from '../../shared/navigation.js'
 import { extensionPopup } from './extensions.js'
 import type { Database } from './database.js'
+
+const documentTypes = new Set(['.txt', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp3', '.mp4', '.wav'])
 
 function configurePermissions(session: Session, db: Database, profile: string) {
   const permits = (origin: string, permission: Permission) => origin.startsWith('https://') &&
@@ -126,13 +128,21 @@ export class Downloads {
 
   list(profile: string) { return this.db.all<Download>('SELECT * FROM downloads WHERE workspaceId = ? ORDER BY createdAt DESC LIMIT 200', profile) }
 
-  async action(profile: string, id: string, action: 'cancel' | 'open' | 'reveal') {
+  async action(profile: string, id: string, action: 'cancel' | 'open' | 'reveal', window: BrowserWindow) {
     const item = this.db.one<Download>('SELECT * FROM downloads WHERE workspaceId = ? AND id = ?', profile, id)
     if (!item) return
     if (action === 'cancel') return this.items.get(id)?.cancel()
-    if (item.state !== 'completed' || !existsSync(item.path)) throw new Error('The downloaded file is unavailable.')
+    const available = () => lstatSync(item.path, { throwIfNoEntry: false })?.isFile()
+    if (item.state !== 'completed' || !available()) throw new Error('The downloaded file is unavailable.')
     if (action === 'reveal') shell.showItemInFolder(item.path)
     else {
+      if (!documentTypes.has(extname(item.path).toLowerCase())) {
+        const result = await dialog.showMessageBox(window, {
+          type: 'warning', message: 'Open this downloaded file?', detail: basename(item.path),
+          buttons: ['Cancel', 'Open File'], defaultId: 0, cancelId: 0, noLink: true,
+        })
+        if (result.response !== 1 || window.isDestroyed() || !available()) return
+      }
       const error = await shell.openPath(item.path)
       if (error) throw new Error(error)
     }
