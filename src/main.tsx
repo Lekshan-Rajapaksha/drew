@@ -21,6 +21,7 @@ import './styles.css'
 
 type Modal =
   | { kind: 'workspace'; space?: Workspace; sameProfile?: boolean }
+  | { kind: 'favorite'; favorite?: Favorite }
   | { kind: 'bookmark'; item?: Bookmark; source?: Tab }
   | { kind: 'group'; parent?: string }
   | { kind: 'folder' }
@@ -29,18 +30,19 @@ type Modal =
 function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
 
   const browser = useApp(state => state.browser)
-  const initial = modal.kind === 'workspace' ? modal.space?.name
+  const initial = modal.kind === 'favorite' ? modal.favorite?.title : modal.kind === 'workspace' ? modal.space?.name
     : modal.kind === 'bookmark' ? modal.item?.title ?? modal.source?.title : ''
   const [name, setName] = useState(initial ?? '')
-  const [url, setUrl] = useState(modal.kind === 'bookmark' ? modal.item?.url ?? modal.source?.url ?? '' : '')
+  const [url, setUrl] = useState(modal.kind === 'favorite' ? modal.favorite?.url ?? '' : modal.kind === 'bookmark' ? modal.item?.url ?? modal.source?.url ?? '' : '')
   const [folder, setFolder] = useState(modal.kind === 'bookmark' ? modal.item?.folderId ?? '' : '')
   const [accent, setAccent] = useState(modal.kind === 'workspace' ? modal.space?.accent ?? accents[0] : accents[0])
   const current = browser?.workspaces.find(space => space.id === browser.workspaceId)
   const [profileId, setProfileId] = useState(current?.profileId ?? current?.id ?? '')
-  const [icon, setIcon] = useState(modal.kind === 'workspace' ? modal.space?.icon ?? '' : '')
+  const [icon, setIcon] = useState(modal.kind === 'favorite' ? modal.favorite?.icon ?? '' : modal.kind === 'workspace' ? modal.space?.icon ?? '' : '')
   const [busy, setBusy] = useState(false)
   const title = modal.kind === 'workspace' ? (modal.space ? 'Edit Space' : modal.sameProfile ? 'New Space' : 'New profile')
-    : modal.kind === 'bookmark' ? (modal.item ? 'Edit bookmark' : 'Add bookmark')
+    : modal.kind === 'favorite' ? (modal.favorite ? 'Edit favorite' : 'Add favorite')
+      : modal.kind === 'bookmark' ? (modal.item ? 'Edit bookmark' : 'Add bookmark')
       : modal.kind === 'group' ? 'New tab group' : modal.kind === 'folder' ? 'New folder'
         : modal.kind === 'confirm' ? modal.title : ''
   const save = async () => {
@@ -51,6 +53,7 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
         ok = await command('saveWorkspace', modal.space?.id ?? null, name, accent, modal.sameProfile ? profileId : null, icon)
         if (ok && !modal.space) useApp.getState().setPage(null)
         break
+      case 'favorite': ok = await command('saveFavorite', modal.favorite?.id ?? null, url, name, icon); break
       case 'bookmark': ok = await command('saveBookmark', modal.item?.id ?? null, name, url, folder || null); break
       case 'group': ok = await command('addGroup', name, modal.parent); break
       case 'folder': ok = await command('addFolder', name); break
@@ -62,10 +65,14 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
   return <Overlay title={title} close={close}>
     <form className="modal-form" onSubmit={event => { event.preventDefault(); void save() }}>
       {modal.kind === 'confirm' ? <p className="muted">{modal.description}</p> : <label>
-        {modal.kind === 'bookmark' ? 'Title' : 'Name'}
-        <input autoFocus required value={name} maxLength={modal.kind === 'workspace' ? 48 : modal.kind === 'bookmark' ? 512 : 64}
+        {modal.kind === 'bookmark' || modal.kind === 'favorite' ? 'Title' : 'Name'}
+        <input autoFocus required value={name} maxLength={modal.kind === 'workspace' ? 48 : modal.kind === 'bookmark' ? 512 : modal.kind === 'favorite' ? 120 : 64}
           onChange={event => setName(event.target.value)} />
       </label>}
+      {modal.kind === 'favorite' && <>
+        <label>Website URL<input type="url" required value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com" /></label>
+        <label>Icon<input value={icon} maxLength={12} placeholder="Optional emoji or short label" onChange={event => setIcon(event.target.value)} /></label>
+      </>}
       {modal.kind === 'bookmark' && <>
         <label>Website URL<input required value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com" /></label>
         <label>Folder<select value={folder} onChange={event => setFolder(event.target.value)}>
@@ -100,7 +107,11 @@ function Browser() {
   const error = useApp(state => state.error)
   const { setBrowser, setPage, setError } = useApp.getState()
   const [width, setWidth] = useState(() => Math.min(360, Math.max(242, Number(localStorage.getItem('sidebar-width')) || 284)))
-  const [requestedCollapse, setCollapsed] = useState(() => localStorage.getItem('sidebar-collapsed') === 'true')
+  const [manualSidebar, setManualSidebar] = useState(false)
+  const [hoverSidebar, setHoverSidebar] = useState(false)
+  const [pointerZone, setPointerZone] = useState<'edge' | 'sidebar' | 'outside'>('outside')
+  const pointerX = useRef<number | null>(null)
+  const [direction, setDirection] = useState(1)
   const [modal, setModal] = useState<Modal | null>(null)
   const [assistantOpen, setAssistantOpen] = useState(false)
   const [palette, setPalette] = useState<'address' | 'command' | 'split' | null>(null)
@@ -124,7 +135,7 @@ function Browser() {
   const external = Boolean(activeUrl && !active?.error && !page)
   const suggestions = editing && address.trim() && address !== activeUrl ? results : []
   const locked = browser?.settings.keepSidebarOpen ?? false
-  const collapsed = requestedCollapse && !locked
+  const collapsed = !locked && !manualSidebar && !hoverSidebar
   const topToolbar = browser?.settings.topToolbar ?? false
   const overlay = Boolean(modal || context || palette || favoriteMenu || dragging)
   const splitTabs = splitIds.map(id => browser?.tabs.find(tab => tab.id === id && tab.workspaceId === space?.id))
@@ -139,6 +150,30 @@ function Browser() {
     window.lexn.getState().then(setBrowser).catch(error => setError(String(error)))
     return off
   }, [setBrowser, setError])
+  useEffect(() => {
+    const classify = (x: number | null) => setPointerZone(x === null || x > width + 48 ? 'outside' : x <= 12 ? 'edge' : 'sidebar')
+    classify(pointerX.current)
+    return window.lexn.onPointer(x => {
+      pointerX.current = x
+      classify(x)
+    })
+  }, [width])
+  const edgeZone = pointerZone === 'edge'
+  const withinSidebar = pointerZone !== 'outside'
+  const holdSidebar = Boolean(dragging || modal || palette || context || favoriteMenu || editing)
+  useEffect(() => {
+    if (edgeZone) {
+      setHoverSidebar(true)
+      return
+    }
+    if (!hoverSidebar || withinSidebar || holdSidebar) return
+    const timer = setTimeout(() => {
+      setHoverSidebar(false)
+      setMenu(null)
+    }, 140)
+    return () => clearTimeout(timer)
+  }, [edgeZone, withinSidebar, holdSidebar, hoverSidebar])
+
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
     const change = () => setSystemDark(media.matches)
@@ -156,7 +191,8 @@ function Browser() {
       else if (name === 'browse') { setMenu(null); setPalette(null); setEditing(false); setPage(null) }
       else if (name === 'sidebar') {
         if (useApp.getState().browser?.settings.keepSidebarOpen) return
-        setCollapsed(previous => { localStorage.setItem('sidebar-collapsed', String(!previous)); return !previous })
+        setManualSidebar(previous => !previous)
+        setHoverSidebar(false)
       }
       else { setMenu(null); setPalette(null); setEditing(false); setPage(name) }
     })
@@ -186,7 +222,9 @@ function Browser() {
     if ((!showView && !splitVisible) || overlay || !node) { window.lexn.layout(null); return }
     const bounds = (element: Element) => {
       const rect = element.getBoundingClientRect()
-      return { x: Math.ceil(rect.x) + 1, y: Math.ceil(rect.y) + 1, width: Math.floor(rect.width) - 2, height: Math.floor(rect.height) - 2 }
+      const x = Math.round(rect.left)
+      const y = Math.round(rect.top)
+      return { x, y, width: Math.round(rect.right) - x, height: Math.round(rect.bottom) - y }
     }
     const panes = [...node.querySelectorAll<HTMLElement>('[data-pane]')]
     const layout = () => {
@@ -216,10 +254,8 @@ function Browser() {
 
   const toggle = () => {
     if (locked) return
-    setCollapsed(previous => {
-      localStorage.setItem('sidebar-collapsed', String(!previous))
-      return !previous
-    })
+    setManualSidebar(collapsed)
+    setHoverSidebar(false)
   }
   const resize = (event: React.PointerEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -249,10 +285,16 @@ function Browser() {
     if (page || !active) void command('newTab', value)
     else void command('navigate', active.id, value)
   }
-  const switchProfile = (id: string) => {
+  const switchProfile = (id: string, swipe?: number) => {
+    if (id === space?.id) return
+    const index = spaces.findIndex(item => item.id === id)
+    const previous = spaces.findIndex(item => item.id === space?.id)
+    const motion = swipe ?? (index > previous ? 1 : -1)
+    const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches
+    setDirection(motion)
     setPalette(null); setMenu(null); setEditing(false); setResults([]); setPage(null)
     setSplitIds([]); setContext(null); setFavoriteMenu(null)
-    void command('workspace', id)
+    void command('workspace', id, animate ? motion : 0)
   }
   const newTab = () => { setMenu(null); setPalette('command') }
   const addSplit = (id: string) => {
@@ -296,16 +338,17 @@ function Browser() {
       if (favoriteMenu && event.target instanceof Element && !event.target.closest('.context-menu')) setFavoriteMenu(null)
       if (context && event.target instanceof Element && !event.target.closest('.context-menu')) setContext(null)
     }}>
-    <ServiceRail collapsed={collapsed} page={page} open={open} newTab={newTab}
-      address={() => { setMenu(null); setPalette('address') }} expand={toggle} spaces={spaces} active={space.id} select={switchProfile} />
+    <div className="rail-slot" inert={collapsed}><ServiceRail page={page} open={open} newTab={newTab}
+      address={() => { setMenu(null); setPalette('address') }} spaces={spaces} active={space.id} select={switchProfile} /></div>
     <Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} toggle={toggle}
       chrome={!topToolbar ? toolbar('side') : null} switchProfile={switchProfile} select={select} newTab={newTab}
       workspaceEditor={(space, sameProfile) => setModal({ kind: 'workspace', space, sameProfile })}
       groupEditor={parent => setModal({ kind: 'group', parent })} resize={resize}
       dragTab={setDragging} openFavorite={id => { setPage(null); setSplitIds([]); void command('openFavorite', id) }}
+      direction={direction} editFavorite={favorite => setModal({ kind: 'favorite', favorite })}
       favoriteMenu={(event, favorite) => {
         event.preventDefault()
-        setFavoriteMenu({ favorite, x: event.clientX, y: Math.min(event.clientY, innerHeight - 65) })
+        setFavoriteMenu({ favorite, x: Math.min(event.clientX, innerWidth - 210), y: Math.min(event.clientY, innerHeight - 105) })
       }}
       context={(event, tab) => {
         event.preventDefault()
@@ -316,7 +359,7 @@ function Browser() {
       {window.lexn.platform !== 'darwin' && !topToolbar && <div className="window-controls-strip"><WindowControls /></div>}
 
       <div className="content-layout">
-      <section ref={viewport} className={'viewport' + (external ? ' website' : '')} style={reserve ? { marginTop: reserve + 8 } : undefined}>
+      <section ref={viewport} className={'viewport ' + (direction < 0 ? 'swipe-right' : 'swipe-left') + (external ? ' website' : '')} style={reserve ? { marginTop: reserve + 8 } : undefined}>
         {splitVisible && <SplitView panes={splitTabs} remove={id => setSplitIds(current => current.filter(item => item !== id))} add={() => setPalette('split')} />}
         {page === 'passwords' && <Passwords key={space.profileId ?? space.id} entries={browser.passwords} />}
         {page === 'extensions' && <div className="management">
@@ -376,6 +419,7 @@ function Browser() {
         { label: 'New Blank Tab', run: () => { setPalette(null); setPage(null); setSplitIds([]); void command('newTab') } },
       ]} />}
     {favoriteMenu && <div className="context-menu" style={{ left: favoriteMenu.x, top: favoriteMenu.y }}>
+      <button type="button" onClick={() => { setModal({ kind: 'favorite', favorite: favoriteMenu.favorite }); setFavoriteMenu(null) }}>Edit favorite</button>
       <button type="button" onClick={() => { void command('removeFavorite', favoriteMenu.favorite.id); setFavoriteMenu(null) }}><X size={15} /> Remove favorite</button>
     </div>}
     {context && <div className="context-menu" style={{ left: context.x, top: context.y }}>

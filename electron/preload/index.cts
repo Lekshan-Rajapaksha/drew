@@ -3,7 +3,7 @@ import type { Bridge, BrowserState, Shortcut } from '../../shared/model.js'
 
 const bridge: Bridge = {
   platform: process.platform,
-  version: '0.3.1',
+  version: '0.3.2',
   getState: () => ipcRenderer.invoke('lexn:state'),
   command: (name, ...args) => ipcRenderer.invoke('lexn:command', name, args),
   history: query => ipcRenderer.invoke('lexn:history', query),
@@ -14,6 +14,11 @@ const bridge: Bridge = {
     const handle = (_event: IpcRendererEvent, state: BrowserState) => listener(state)
     ipcRenderer.on('lexn:state', handle)
     return () => ipcRenderer.removeListener('lexn:state', handle)
+  },
+  onPointer: listener => {
+    const handle = (_event: IpcRendererEvent, x: number | null) => listener(x)
+    ipcRenderer.on('lexn:pointer', handle)
+    return () => ipcRenderer.removeListener('lexn:pointer', handle)
   },
   onShortcut: listener => {
     const handle = (_event: IpcRendererEvent, name: Shortcut) => listener(name)

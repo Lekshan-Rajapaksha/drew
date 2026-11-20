@@ -69,7 +69,7 @@ export function Settings({ browser, confirm }: { browser: BrowserState; confirm:
         <input type="checkbox" aria-label="Show top toolbar" checked={settings.topToolbar}
           onChange={event => { void command('setSetting', 'topToolbar', event.target.checked) }} />
       </Setting>
-      <Setting label="Keep tab sidebar expanded" detail="Locks the tab sidebar open. The service rail is always visible.">
+      <Setting label="Keep tab sidebar expanded" detail="Keep the sidebar and service rail visible when the pointer leaves.">
         <input type="checkbox" aria-label="Keep tab sidebar expanded" checked={settings.keepSidebarOpen}
           onChange={event => { void command('setSetting', 'keepSidebarOpen', event.target.checked) }} />
       </Setting>

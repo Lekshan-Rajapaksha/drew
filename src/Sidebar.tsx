@@ -1,21 +1,19 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronDown, Code2, Folder, Globe, Mail, Music2, PanelLeftClose, Pause, Play, Plus, Search, Volume2, VolumeX, X, CalendarDays, HardDrive } from 'lucide-react'
+import { ChevronDown, Folder, PanelLeftClose, Pause, Play, Plus, Volume2, VolumeX, X } from 'lucide-react'
 import type { BrowserState, Favorite, Tab, TabGroup, Workspace } from '../shared/model'
 import { command, type Page } from './state'
+import { Favorites } from './Favorites'
 import { useSpaceGesture } from './useSpaceGesture'
 import { Favicon, Tool } from './ui'
 
-const shortcutIcons = { google: Search, youtube: Play, github: Code2, wikipedia: Globe, mail: Mail, calendar: CalendarDays, drive: HardDrive, music: Music2 }
-const favoriteColors = ['#9ec6ff', '#ff8298', '#d0bcff', '#9ae6d7', '#f9a78e', '#b7bbff', '#a9da9e', '#a5eab2']
-
-export function Sidebar({ browser, space, active, page, collapsed, locked, toggle, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu }: {
+export function Sidebar({ browser, space, active, page, collapsed, locked, toggle, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, direction }: {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
   toggle: () => void; select: (id: string) => void; newTab: () => void
   workspaceEditor: (space?: Workspace, sameProfile?: boolean) => void; groupEditor: (parent?: string) => void;
-  switchProfile: (id: string) => void; chrome: ReactNode;
+  switchProfile: (id: string, direction?: number) => void; chrome: ReactNode;
   context: (event: React.MouseEvent, tab: Tab) => void; resize: (event: React.PointerEvent<HTMLDivElement>) => void
   dragTab: (id: string | null) => void; openFavorite: (id: string) => void;
-  favoriteMenu: (event: React.MouseEvent, favorite: Favorite) => void
+  favoriteMenu: (event: React.MouseEvent, favorite: Favorite) => void; editFavorite: (favorite?: Favorite) => void; direction: number
 }) {
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
@@ -69,17 +67,9 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, toggl
       <Tool label={locked ? "Sidebar is locked open" : "Collapse sidebar"} disabled={locked} className="sidebar-toggle" onClick={toggle}><PanelLeftClose size={18} /></Tool>
       {chrome}
     </header>
-    <div className="tabs-scroll spatial-scroll" key={space.id}>
-      <section className="favorites-grid" aria-label="Favorites">
-        {browser.favorites.map((favorite, i) => {
-          const Icon = shortcutIcons[favorite.id as keyof typeof shortcutIcons]
-          return <button key={favorite.id} type="button" aria-label={favorite.title} title={favorite.title}
-            aria-pressed={favorite.url === active?.url} onClick={() => openFavorite(favorite.id)} onContextMenu={event => favoriteMenu(event, favorite)}
-            style={{ '--favorite-accent': favoriteColors[i % favoriteColors.length] } as React.CSSProperties}>
-            {Icon ? <Icon size={19} /> : favorite.favicon ? <Favicon tab={{ favicon: favorite.favicon }} /> : favorite.title.slice(0, 1).toUpperCase()}
-          </button>
-        })}
-      </section>
+    <div className={'tabs-scroll spatial-scroll swipe-' + (direction < 0 ? 'right' : 'left')} key={space.id}>
+      <Favorites items={browser.favorites} size={browser.settings.favoriteSize} activeUrl={active?.url}
+        open={openFavorite} edit={editFavorite} menu={favoriteMenu} />
       <section className="tab-tier" aria-label="Pinned tabs">
         <div className="side-label">Pinned<Tool label="Create tab group" onClick={() => groupEditor()}><Plus size={14} /></Tool></div>
         {groups.filter(group => !group.parentId).map(renderFolder)}

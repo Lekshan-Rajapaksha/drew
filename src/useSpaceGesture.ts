@@ -1,13 +1,13 @@
 import { useRef } from 'react'
 import type { Workspace } from '../shared/model'
 
-export function useSpaceGesture(spaces: Workspace[], active: string, select: (id: string) => void) {
+export function useSpaceGesture(spaces: Workspace[], active: string, select: (id: string, direction?: number) => void) {
   const wheel = useRef({ distance: 0, last: 0, switched: 0 })
   const touch = useRef<{ x: number; y: number } | null>(null)
   const advance = (direction: number) => {
     const index = spaces.findIndex(space => space.id === active)
     if (index < 0 || spaces.length < 2) return
-    select(spaces[(index + direction + spaces.length) % spaces.length].id)
+    select(spaces[(index + direction + spaces.length) % spaces.length].id, direction)
   }
   return {
     onWheel: (event: React.WheelEvent) => {

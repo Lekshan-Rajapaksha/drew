@@ -12,7 +12,7 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads): Br
   return {
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
     workspaceId: tabs.workspaceId, extensions: downloads.extensions(profile),
-    favorites: db.all<Favorite>('SELECT * FROM favorites ORDER BY rowid'),
+    favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites ORDER BY position, rowid'),
     archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces: tabs.workspaces(), tabs: tabs.list(),
     groups: db.all<TabGroup>('SELECT * FROM tab_groups ORDER BY rowid'),
     bookmarks: db.all<Bookmark>('SELECT id, title, url, folderId FROM bookmarks WHERE workspaceId = ? ORDER BY rowid DESC', profile),
@@ -116,7 +116,32 @@ export function bindIpc(
     favorite: value => {
       const tab = tabs.list().find(tab => tab.id === id(value) && tab.workspaceId === tabs.workspaceId)
       if (!tab || !webUrl(tab.url)) return
-      db.run('INSERT OR IGNORE INTO favorites VALUES (?, ?, ?, ?)', randomUUID(), tab.url, tab.title, tab.favicon)
+      db.run('INSERT OR IGNORE INTO favorites (id, url, title, favicon, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites))', randomUUID(), tab.url, tab.title, tab.favicon)
+    },
+    saveFavorite: (value, url, title, icon) => {
+      const address = site(url)
+      const name = required(title, 120)
+      const glyph = text(icon, 12)
+      if (value === null) {
+        db.run(`INSERT INTO favorites (id, url, title, icon, position)
+          VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites))
+          ON CONFLICT(url) DO UPDATE SET title = excluded.title, icon = excluded.icon`, randomUUID(), address, name, glyph)
+      } else {
+        db.run('UPDATE favorites SET favicon = CASE WHEN url = ? THEN favicon ELSE NULL END, url = ?, title = ?, icon = ? WHERE id = ?',
+          address, address, name, glyph, required(value, 64))
+      }
+    },
+    moveFavorite: (value, target) => {
+      const source = required(value, 64)
+      const destination = target === null ? null : required(target, 64)
+      if (source === destination) return
+      const sorted = db.all<{ id: string }>('SELECT id FROM favorites ORDER BY position, rowid').map(item => item.id)
+      const from = sorted.indexOf(source)
+      const to = destination === null ? sorted.length - 1 : sorted.indexOf(destination)
+      if (from < 0 || to < 0) return
+      sorted.splice(from, 1)
+      sorted.splice(to, 0, source)
+      db.transaction(() => sorted.forEach((id, index) => db.run('UPDATE favorites SET position = ? WHERE id = ?', index, id)))
     },
     removeFavorite: value => { db.run('DELETE FROM favorites WHERE id = ?', required(value, 64)) },
     openFavorite: value => {
@@ -138,7 +163,7 @@ export function bindIpc(
     pageAction: (value, action) => tabs.action(id(value), choice(action, ['back', 'forward', 'reload', 'stop', 'home'])),
     reopenTab: () => tabs.reopen(),
     nextTab: reverse => tabs.next(reverse === undefined ? false : boolean(reverse)),
-    workspace: value => tabs.switchWorkspace(id(value)),
+    workspace: (value, direction) => tabs.switchWorkspace(id(value), direction === -1 ? -1 : direction === 1 ? 1 : 0),
     saveWorkspace: (value, name, accent, profile, icon) => {
       const label = required(name, 48)
       const color = choice(accent, accents)
@@ -177,6 +202,7 @@ export function bindIpc(
           db.set(key, '')
           break
         case 'archiveHours': db.set(key, choice(value, ['0', '12', '24', '72', '168'])); break
+        case 'favoriteSize': db.set(key, choice(value, ['small', 'medium', 'large'])); break
         case 'keepSidebarOpen':
         case 'topToolbar': db.set(key, boolean(value)); break
         case 'javascript':

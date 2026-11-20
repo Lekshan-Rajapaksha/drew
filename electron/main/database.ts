@@ -80,6 +80,12 @@ const migrations = [
     ('music','https://open.spotify.com/','Music',NULL);
   `,
 
+  `
+  ALTER TABLE favorites ADD COLUMN position INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE favorites ADD COLUMN icon TEXT NOT NULL DEFAULT '';
+  UPDATE favorites SET position = rowid;
+  `,
+
 ]
 
 type Value = string | number | null
@@ -156,6 +162,7 @@ export class Database {
       background: this.get('background', defaultSettings.background), javascript: this.get('javascript', true),
       archiveHours: this.get('archiveHours', defaultSettings.archiveHours), downloadPath: this.get('downloadPath', ''), topToolbar: this.get('topToolbar', defaultSettings.topToolbar),
       keepSidebarOpen: this.get('keepSidebarOpen', defaultSettings.keepSidebarOpen),
+      favoriteSize: this.get('favoriteSize', defaultSettings.favoriteSize),
     }
   }
 

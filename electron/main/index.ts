@@ -2,7 +2,7 @@ import { webUrl } from '../../shared/navigation.js'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, isAbsolute, join } from 'node:path'
-import { app, BrowserWindow, dialog, Menu, protocol, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, Menu, protocol, screen, type WebContents } from 'electron'
 import type { Shortcut } from '../../shared/model.js'
 import { Database } from './database.js'
 import { bindIpc, browserState } from './ipc.js'
@@ -108,6 +108,21 @@ function createWindow() {
   const tabs: Tabs = new Tabs(browser, db, id => downloads!.sessionFor(id), changed, view => { wireKeys(view.webContents) }, preview)
   externalLink = preview
   tabs.archive(true)
+  let lastPointer: number | null | undefined
+  const pointerTimer = setInterval(() => {
+    if (browser.isDestroyed()) return
+    let pointer: number | null = null
+    if (browser.isFocused() && browser.webContents.getURL() === uiUrl) {
+      const within = browser.getContentBounds()
+      const cursor = screen.getCursorScreenPoint()
+      const x = cursor.x - within.x
+      const y = cursor.y - within.y
+      if (x >= 0 && x < within.width && y >= 0 && y < within.height) pointer = x
+    }
+    if (lastPointer === pointer) return
+    lastPointer = pointer
+    browser.webContents.send('lexn:pointer', pointer)
+  }, 33)
   const archiveTimer = setInterval(() => tabs.archive(true), 60_000)
   const unbind = bindIpc(browser, uiUrl, db, tabs, downloads, changed)
   wireKeys(browser.webContents)
@@ -115,7 +130,7 @@ function createWindow() {
   browser.webContents.on('will-navigate', event => event.preventDefault())
   browser.webContents.on('will-attach-webview', event => event.preventDefault())
   browser.once('ready-to-show', () => { if (!browser.isVisible()) browser.show() })
-  browser.on('close', () => { clearInterval(archiveTimer); tabs.dispose() })
+  browser.on('close', () => { clearInterval(archiveTimer); clearInterval(pointerTimer); tabs.dispose() })
   browser.on('closed', () => {
     unbind()
     window = null

@@ -15,12 +15,13 @@ export interface Settings {
   downloadPath: string
   topToolbar: boolean
   keepSidebarOpen: boolean
+  favoriteSize: string
   archiveHours: string
   javascript: boolean
 }
 export const defaultSettings: Settings = {
   engine: 'google', homepage: HOME, startup: 'restore', theme: 'dark',
-  background: 'violet', downloadPath: '', topToolbar: false, keepSidebarOpen: false, archiveHours: '24', javascript: true,
+  background: 'violet', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
 export interface TabGroup { id: string; workspaceId: string; name: string; parentId: string | null }
@@ -41,7 +42,7 @@ export interface Download {
 export type Permission = 'camera' | 'microphone' | 'notifications'
 export interface SitePermission { origin: string; permission: Permission; allow: 0 | 1 }
 export interface SiteCookie { name: string; domain: string; path: string; secure: boolean }
-export interface Favorite { id: string; url: string; title: string; favicon: string | null }
+export interface Favorite { id: string; url: string; title: string; favicon: string | null; icon: string }
 export interface ArchivedTab { id: string; url: string; title: string; archivedAt: number }
 export interface ViewRect { x: number; y: number; width: number; height: number }
 export interface PaneRect extends ViewRect { id: string }
@@ -73,6 +74,8 @@ export interface Commands {
   groupTab: [id: string, group: string | null]
   addGroup: [name: string, parentId?: string]
   favorite: [tabId: string]
+  saveFavorite: [id: string | null, url: string, title: string, icon: string]
+  moveFavorite: [id: string, target: string | null]
   removeFavorite: [id: string]
   openFavorite: [id: string]
   archiveTabs: []
@@ -82,7 +85,7 @@ export interface Commands {
   pageAction: [id: string, action: 'back' | 'forward' | 'reload' | 'stop' | 'home']
   reopenTab: []
   nextTab: [reverse?: boolean]
-  workspace: [id: string]
+  workspace: [id: string, direction?: number]
   saveWorkspace: [id: string | null, name: string, accent: string, profileId?: string | null, icon?: string]
   saveBookmark: [id: string | null, title: string, url: string, folder: string | null]
   deleteBookmark: [id: string]
@@ -108,5 +111,6 @@ export interface Bridge {
   cookies(): Promise<SiteCookie[]>
   layout(rect: ViewRect | PaneRect[] | null): void
   onState(listener: (state: BrowserState) => void): () => void
+  onPointer(listener: (x: number | null) => void): () => void
   onShortcut(listener: (name: Shortcut) => void): () => void
 }

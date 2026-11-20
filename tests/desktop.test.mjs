@@ -56,6 +56,15 @@ async function shortcut(app, keyCode, modifiers) {
   }, { keyCode, modifiers })
 }
 
+async function pointAt(app, x) {
+  await app.evaluate(({ BrowserWindow, screen }, x) => {
+    const win = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('lexn://shell'))
+    const bounds = win.getContentBounds()
+    screen.getCursorScreenPoint = () => ({ x: bounds.x + x, y: bounds.y + 220 })
+    win.focus()
+  }, x)
+}
+
 function serve(request, response) {
   switch (request.url) {
     case '/download':
@@ -96,6 +105,9 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   const launch = async () => {
     app = await electron.launch({ args: ['.'], executablePath, env, timeout: 30000 })
     const page = await shellPage(app)
+    await page.locator('.spatial-browser').waitFor()
+    await pointAt(app, 850)
+    await shortcut(app, 'S', [process.platform === 'darwin' ? 'meta' : 'control'])
     await page.getByRole('combobox', { name: 'Address and search' }).waitFor()
     return page
   }
@@ -131,16 +143,30 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('button', { name: 'Collapse sidebar' }).click()
   await page.locator('.spatial-browser.spatial-collapsed').waitFor()
   await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor({ state: 'hidden' })
+  if (process.platform === 'darwin') await waitUntil(async () => await app.evaluate(({ BrowserWindow }) => {
+    const root = BrowserWindow.getAllWindows()[0]
+    const view = root.contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
+    const rect = view?.getBounds()
+    const [width, height] = root.getContentSize()
+    return rect && rect.x === 0 && rect.y === 0 && rect.width === width && rect.height === height
+  }), 'web content did not extend to every window edge')
+  await pointAt(app, 3)
+  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor()
+  await pointAt(app, 850)
+  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor({ state: 'hidden' })
+  await pointAt(app, 3)
+  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor()
   const services = page.getByRole('navigation', { name: 'Browser services' })
   await services.getByRole('button', { name: 'Bookmarks' }).waitFor()
   await services.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).check()
   await page.getByRole('button', { name: 'Sidebar is locked open' }).waitFor()
+  await pointAt(app, 850)
   await shortcut(app, 'S', [toggleModifier])
   assert.equal(await page.locator('.spatial-collapsed').count(), 0)
   await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).uncheck()
-  await page.getByRole('button', { name: 'Expand sidebar' }).click()
+  await shortcut(app, 'S', [toggleModifier])
   await page.locator(`[data-tab-id="${one.id}"]`).click()
   await waitUntil(async () => await activeView(app) === origin + '/one', 'website did not reattach after changing chrome')
 
@@ -268,6 +294,30 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await app.evaluate(({ BrowserWindow }) => {
     BrowserWindow.getAllWindows().find(win => win.webContents.getURL().startsWith('chrome-extension://')).close()
   })
+  const favorites = page.getByRole('region', { name: 'Favorites' })
+  await favorites.getByRole('button', { name: 'Add favorite', exact: true }).click()
+  const addFavorite = page.getByRole('dialog', { name: 'Add favorite' })
+  await addFavorite.getByRole('textbox', { name: 'Title' }).fill('Fixture Favorite')
+  await addFavorite.getByRole('textbox', { name: 'Website URL' }).fill(origin + '/favorite')
+  await addFavorite.getByRole('textbox', { name: 'Icon' }).fill('★')
+  await addFavorite.getByRole('button', { name: 'Save', exact: true }).click()
+  const tile = favorites.getByRole('button', { name: 'Fixture Favorite' })
+  await tile.waitFor()
+  await tile.dragTo(favorites.getByRole('button', { name: 'Google' }))
+  await waitUntil(async () => (await getState(page)).favorites[0].title === 'Fixture Favorite', 'favorite did not move')
+  await favorites.getByRole('combobox', { name: 'Favorite icon size' }).selectOption('small')
+  await page.locator('.favorites-small').waitFor()
+  await tile.click({ button: 'right' })
+  await page.getByRole('button', { name: 'Edit favorite', exact: true }).click()
+  const editFavorite = page.getByRole('dialog', { name: 'Edit favorite' })
+  await editFavorite.getByRole('textbox', { name: 'Icon' }).fill('✦')
+  await editFavorite.getByRole('button', { name: 'Save', exact: true }).click()
+  await waitUntil(async () => (await getState(page)).favorites[0].icon === '✦', 'favorite edit did not persist')
+  await favorites.getByRole('button', { name: 'Music' }).click({ button: 'right' })
+  await page.getByRole('button', { name: 'Remove favorite', exact: true }).click()
+  await favorites.getByRole('button', { name: 'Music' }).waitFor({ state: 'detached' })
+  await page.locator(`[data-tab-id="${one.id}"]`).dragTo(favorites.getByRole('button', { name: 'Add or drop favorite' }))
+  await waitUntil(async () => (await getState(page)).favorites.some(item => item.url === origin + '/two'), 'tab drag did not add a favorite')
   const preRestartHistory = await page.evaluate(() => window.lexn.history('Fixture Two'))
   assert.ok(preRestartHistory.length > 0)
   await page.getByRole('button', { name: 'Add Space or profile' }).click()
@@ -286,10 +336,14 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   assert.deepEqual(isolated.permissions, [])
   assert.deepEqual(await page.evaluate(() => window.lexn.cookies()), [])
   assert.deepEqual(await page.evaluate(() => window.lexn.history('')), [])
-  assert.equal(isolated.favorites.length, 8)
+  assert.equal(isolated.favorites[0].title, 'Fixture Favorite')
   await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 105, deltaY: 0 })
   await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Personal' }, 'horizontal swipe did not advance to Personal')
-  await page.getByRole('button', { name: 'Research', exact: true }).click()
+  await page.locator('.spatial-scroll.swipe-left').waitFor()
+  await sleep(540)
+  await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: -105, deltaY: 0 })
+  await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Research' }, 'reverse swipe did not return to Research')
+  await page.locator('.spatial-scroll.swipe-right').waitFor()
 
   await go(page, origin + '/one')
   await waitUntil(async () => (await active(page)).title === 'LexN Fixture One', 'profile navigation failed')
@@ -326,6 +380,8 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   page = await launch()
   assert.equal((await active(page)).url, origin + '/one')
   assert.equal((await getState(page)).settings.theme, 'light')
+  assert.equal((await getState(page)).settings.favoriteSize, 'small')
+  assert.equal((await getState(page)).favorites[0].icon, '✦')
   await page.locator('.toolbar-top').waitFor()
   await page.getByRole('button', { name: 'Personal', exact: true }).click()
   const postRestartHistory = await page.evaluate(() => window.lexn.history('Fixture Two'))
@@ -393,6 +449,8 @@ test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LE
   })
   app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
   const page = await shellPage(app)
+  await page.locator('.spatial-browser').waitFor()
+  await shortcut(app, 'S', [process.platform === 'darwin' ? 'meta' : 'control'])
   for (const [input, host, path] of [['google.com', /google\./, /^\/$/], ['Chromium browser', /google\./, /^\/search/], ['youtube.com', /youtube\.com/, /^\/$/]]) {
     await t.test(input, async subtest => {
       await go(page, input)

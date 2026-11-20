@@ -27,7 +27,7 @@ async function waitFor(check, description) {
 const showShell = async () => {
   const page = await waitFor(() => app.context().pages().find(candidate =>
     candidate.url() === 'lexn://shell/index.html' && !candidate.isClosed()), 'The packaged shell did not load.')
-  await page.getByRole('navigation', { name: 'Browser services' }).waitFor()
+  await page.locator('.spatial-browser').waitFor()
   await waitFor(() => app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows().some(window =>
     window.webContents.getURL() === 'lexn://shell/index.html' && window.isVisible() && !window.isMinimized())),
   'The packaged window is hidden or minimized.')
@@ -36,10 +36,14 @@ const showShell = async () => {
 
 try {
   app = await electron.launch({ executablePath, args })
-  await showShell()
+  const page = await showShell()
+  if (process.env.LEXN_SCREENSHOT) {
+    await page.locator('.spatial-collapsed').waitFor()
+    await page.screenshot({ path: process.env.LEXN_SCREENSHOT })
+  }
   const install = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), path: app.getPath('userData') }))
   assert.equal(install.packaged, true)
-  assert.equal(install.version, '0.3.1')
+  assert.equal(install.version, '0.3.2')
   assert.equal(install.path, profile)
   console.log('Packaged LexN opened on a clean profile.')
 

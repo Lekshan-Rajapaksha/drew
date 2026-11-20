@@ -16,6 +16,8 @@ export class Tabs {
   private closed: SavedTab[] = []
   private attached = new Set<WebContentsView>()
   private bounds: Rectangle | PaneRect[] | null = null
+  private spaceSlide: { start: number; direction: number } | null = null
+  private slideTimer: ReturnType<typeof setTimeout> | null = null
   private shuttingDown = false
   workspaceId: string
 
@@ -59,7 +61,6 @@ export class Tabs {
         webSecurity: true, javascript: this.db.settings().javascript, navigateOnDragDrop: false,
       },
     })
-    view.setBorderRadius(13)
     tab.view = view
     const wc = view.webContents
     const state = tab.state
@@ -214,10 +215,13 @@ export class Tabs {
     this.changed()
   }
 
-  switchWorkspace(id: string) {
+  switchWorkspace(id: string, direction = 0) {
     const space = this.workspaces().find(item => item.id === id)
     if (!space) return
-    if (id !== this.workspaceId && Array.isArray(this.bounds)) this.bounds = null
+    if (id !== this.workspaceId) {
+      if (Array.isArray(this.bounds)) this.bounds = null
+      this.spaceSlide = direction ? { start: performance.now(), direction } : null
+    }
     this.workspaceId = id
     this.db.set('workspaceId', id)
     const tabs = this.list().filter(tab => tab.workspaceId === id)
@@ -406,9 +410,21 @@ export class Tabs {
       if (tab.view) next.set(tab.view, { x: slot.x, y: slot.y, width: slot.width, height: slot.height })
     }
     for (const view of this.attached) if (!next.has(view)) this.window.contentView.removeChildView(view)
+    const slide = this.spaceSlide
+    let offset = 0
+    if (slide && !Array.isArray(bounds)) {
+      const progress = Math.min(1, (performance.now() - slide.start) / 290)
+      offset = Math.round(42 * (1 - progress) ** 3) * slide.direction
+      if (progress >= 1) this.spaceSlide = null
+      else if (!this.slideTimer) this.slideTimer = setTimeout(() => {
+        this.slideTimer = null
+        this.syncView()
+      }, 16)
+    }
     for (const [view, rect] of next) {
       if (!this.attached.has(view)) this.window.contentView.addChildView(view)
-      view.setBounds(rect)
+      const inset = Math.min(Math.abs(offset), Math.max(0, rect.width - 1))
+      view.setBounds({ ...rect, x: rect.x + (offset > 0 ? inset : 0), width: rect.width - inset })
     }
     this.attached = new Set(next.keys())
   }
@@ -427,6 +443,7 @@ export class Tabs {
 
   dispose() {
     this.shuttingDown = true
+    if (this.slideTimer) clearTimeout(this.slideTimer)
     for (const tab of this.tabs.values()) this.destroyView(tab)
   }
 }
