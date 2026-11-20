@@ -168,7 +168,7 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
       <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
       <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
     </div>}
-    {section === 'Import' && <BrowserImport profile={profile?.name ?? 'this Profile'} />}
+    {section === 'Import' && <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />}
     {section === 'New Tab' && <div className="setting-list">
       <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
         {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}

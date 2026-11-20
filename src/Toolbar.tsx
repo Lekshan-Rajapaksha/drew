@@ -1,6 +1,6 @@
 import {
-  ArrowDownToLine, ArrowLeft, ArrowRight, Ellipsis, Heart, House, KeyRound,
-  PanelTopClose, PanelTopOpen, Plus, Puzzle, RotateCw, Search, Sparkles, SquarePlus, Star, X,
+  Archive, ArrowDownToLine, ArrowLeft, ArrowRight, Bookmark, Clock3, Ellipsis, Heart, House, KeyRound,
+  PanelTopClose, PanelTopOpen, Plus, Puzzle, RotateCw, Search, Settings2, Sparkles, SquarePlus, Star, X,
 } from 'lucide-react'
 import type { RefObject } from 'react'
 import type { Tab } from '../shared/model'
@@ -56,11 +56,14 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
         {menu === 'options' && <>
           <button onClick={newWindow}><SquarePlus size={16} /> New Window</button>
           <button onClick={toggleToolbar}>{variant === 'top' ? <PanelTopClose size={16} /> : <PanelTopOpen size={16} />} {variant === 'top' ? 'Hide top toolbar' : 'Show top toolbar'}</button>
+          <button onClick={() => open('bookmarks')}><Bookmark size={16} /> Bookmarks</button>
+          <button onClick={() => open('history')}><Clock3 size={16} /> History</button>
           <button onClick={() => open('downloads')}><ArrowDownToLine size={16} /> Downloads</button>
+          <button onClick={() => open('archive')}><Archive size={16} /> Archived tabs</button>
           <button onClick={() => open('assistant')}><Sparkles size={16} /> Page assistant</button>
           <button onClick={() => open('extensions')}><Puzzle size={16} /> Extensions</button>
           <button onClick={() => open('passwords')}><KeyRound size={16} /> Passwords</button>
-          <button onClick={() => open('settings')}>Settings</button>
+          <button onClick={() => open('settings')}><Settings2 size={16} /> Settings</button>
         </>}
       </div>}
     </div>}

@@ -1,12 +1,59 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { addressToUrl, originOf, webUrl } from '../out/shared/navigation.js'
 import { Database } from '../out/electron/main/database.js'
-import { exportedLinks, passwordRows, readChromium, saveImported } from '../out/electron/main/importData.js'
+import { exportedLinks, passwordRows, readChromium, saveImported, scanChromiumProfiles } from '../out/electron/main/importData.js'
+import { chromiumProfile, markdownProfiles, saveBrowserProfiles } from '../out/electron/main/profileImport.js'
+
+test('Profile migrations preserve layout data and reuse the same isolated destinations on retry', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'drew-profile-migration-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const defaultPath = join(dir, 'Default')
+  const workPath = join(dir, 'Profile 1')
+  mkdirSync(defaultPath)
+  mkdirSync(workPath)
+  writeFileSync(join(dir, 'Local State'), JSON.stringify({ profile: { info_cache: {
+    Default: { name: 'Personal' }, 'Profile 1': { name: 'Office' },
+  } } }))
+  writeFileSync(join(defaultPath, 'Preferences'), JSON.stringify({ browser: { theme: { user_color2: 0xff3388aa, color_scheme2: 1 } },
+    pinned_tabs: [{ url: 'https://example.org/pin', title: 'Browser pin' }] }))
+  writeFileSync(join(defaultPath, 'Bookmarks'), JSON.stringify({ roots: { bookmark_bar: {
+    name: 'Bookmarks Bar', children: [{ type: 'url', name: 'Toolbar favorite', url: 'https://example.org/favorite' }],
+  } } }))
+  writeFileSync(join(workPath, 'Preferences'), '{}')
+  const sources = await scanChromiumProfiles(dir, 'Chrome')
+  assert.deepEqual(sources.map(source => source.label), ['Personal', 'Office'])
+  const data = await Promise.all(sources.map(chromiumProfile))
+  const db = new Database(join(dir, 'target.sqlite'))
+  t.after(() => db.close())
+  const first = saveBrowserProfiles(db, data)
+  const [personal, office] = first.results.profiles
+  assert.equal(personal.name, 'Personal (2)')
+  assert.equal(db.settings(personal.id).accentColor, '#3388aa')
+  assert.equal(db.settings(personal.id).theme, 'light')
+  assert.equal(first.results.favorites, 1)
+  assert.equal(first.createdTabs[0].title, 'Browser pin')
+  assert.equal(first.createdTabs[0].workspaceId, personal.id)
+  assert.equal(first.createdTabs[0].pinned, 1)
+  assert.equal(db.all('SELECT id FROM favorites WHERE profileId = ?', office.id).length, 0)
+  const repeat = saveBrowserProfiles(db, data)
+  assert.deepEqual(repeat.results.profiles, first.results.profiles)
+  assert.equal(repeat.createdTabs.length, 0)
+
+  const markdown = markdownProfiles('# Arc Data Export\n## Space: Studio\nColor: #aabbcc\n### Favorites\n- [Mail](https://example.org/mail)\n### Pinned Tabs\n- **Planning**\n  - **Quarterly**\n    - [Roadmap](https://example.org/roadmap)\n### Today\n- [Read](https://example.org/read)\n## Space: Library\n### Pinned Tabs\n- [Research](https://example.org/research)', 'Arc')
+  const imported = saveBrowserProfiles(db, markdown)
+  const [studio, library] = imported.results.profiles
+  assert.deepEqual(imported.results.profiles.map(profile => profile.name), ['Studio', 'Library'])
+  assert.equal(db.settings(studio.id).accentColor, '#aabbcc')
+  assert.equal(imported.results.pinned, 2)
+  assert.equal(imported.results.tabs, 1)
+  assert.deepEqual(db.all('SELECT url FROM tabs WHERE workspaceId = ?', library.id).map(tab => tab.url), ['https://example.org/research'])
+  assert.deepEqual(db.all('SELECT name FROM tab_groups WHERE workspaceId = ? ORDER BY rowid', studio.id).map(group => group.name), ['Planning', 'Quarterly'])
+})
 
 test('browser imports preserve folders and timestamps, ignore duplicates, and stay in the destination Profile', async t => {
   const dir = mkdtempSync(join(tmpdir(), 'drew-import-'))

@@ -183,7 +183,10 @@ function createWindow(initialSpace?: string) {
   }, 33)
   const archiveTimer = setInterval(() => tabs.archive(true), 60_000)
   bindIpc(browser, uiUrl, db, tabs, downloads, notifyWindows, sidebar, () => nativeSpaceScroll,
-    () => { createWindow(tabs.workspaceId) }, peerTabs, focusWindowTab)
+    () => { createWindow(tabs.workspaceId) }, peerTabs, focusWindowTab, records => {
+      const owner = [...windows.values()].find(entry => entry.tabs.managesSavedTabs)?.tabs ?? tabs
+      owner.registerImported(records)
+    })
   wireKeys(browser.webContents)
   browser.webContents.setWindowOpenHandler(details => {
     if (details.url !== 'about:blank' || browser.webContents.getURL() !== uiUrl) return { action: 'deny' }

@@ -3,14 +3,13 @@ import { ArrowLeft, ArrowRight, ChevronDown, Ellipsis, ExternalLink, Folder, Hou
 import { HOME, themeAccents, type BrowserState, type Favorite, type Tab, type TabGroup, type Workspace } from '../shared/model'
 import { effectiveShortcuts, shortcutLabel } from '../shared/shortcuts'
 import { command, type Page } from './state'
-import { ServiceRail } from './ServiceRail'
 import { Favorites } from './Favorites'
 import { Favicon, Tool } from './ui'
 import type { SwipePreview } from './useSpaceGesture'
 
 type SidebarProps = {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
-  pinPending: boolean; pinSidebar: () => void; open: (page: Page) => void; select: (id: string) => void; newTab: () => void
+  pinPending: boolean; pinSidebar: () => void; openActions: () => void; select: (id: string) => void; newTab: () => void
   workspaceEditor: (space?: Workspace, sameProfile?: boolean) => void; groupEditor: (parent?: string) => void;
   switchProfile: (id: string, direction?: number) => void; chrome: ReactNode;
   context: (event: React.MouseEvent, tab: Tab) => void; resize: (event: React.PointerEvent<HTMLDivElement>) => void
@@ -28,10 +27,10 @@ export function Sidebar(props: SidebarProps) {
   const accent = nextTheme && neighbor ? next?.settings.accentColor || themeAccents[nextTheme] || neighbor.accent : undefined
   return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '') + (compact ? ' compact-sidebar' : '')} inert={collapsed}>
     <div className={'sidebar-carousel' + (preview?.settling ? ' swipe-settling' : '')}>
-      <div className="sidebar-slide" style={{ transform: `translateX(${-shift}%)` }}>
+      <div key={props.space.id} className="sidebar-slide sidebar-swipe-current" style={{ transform: `translateX(${-shift}%)` }}>
         <SidebarPage {...props} />
       </div>
-      {neighbor && next && preview && <div className={`sidebar-slide sidebar-swipe-next ${nextTheme ?? ''}`} inert aria-hidden="true"
+      {neighbor && next && preview && <div key={neighbor.id + '-preview-' + preview.direction} className={`sidebar-slide sidebar-swipe-next ${nextTheme ?? ''}`} inert aria-hidden="true"
         style={{ '--ambient': accent, '--accent': accent, '--ambient-end': next.settings.accentEnd || accent,
           '--swipe-edge': preview.direction * 100 + '%',
           transform: `translateX(${preview.direction * 100 - shift}%)` } as CSSProperties}>
@@ -43,6 +42,7 @@ export function Sidebar(props: SidebarProps) {
           chrome={!compact && !next.settings.topToolbar ? <PreviewToolbar url={next.tabs.find(tab => tab.id === neighbor.activeTab)?.url} /> : null} />
       </div>}
     </div>
+    <ProfileStrip browser={browser} space={props.space} switchProfile={props.switchProfile} workspaceEditor={props.workspaceEditor} />
     {!compact && <div className="resize-handle" role="separator" aria-label="Sidebar width" aria-orientation="vertical" onPointerDown={resize} />}
   </aside>
 }
@@ -55,10 +55,9 @@ function PreviewToolbar({ url }: { url?: string }) {
   </div>
 }
 
-function SidebarPage({ browser, space, active, page, locked, pinPending, pinSidebar, open, select, newTab, workspaceEditor, groupEditor, context, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, compact, address, goHome }: SidebarProps) {
+function SidebarPage({ browser, space, active, page, locked, pinPending, pinSidebar, openActions, select, newTab, groupEditor, context, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, compact, address, goHome }: SidebarProps) {
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
-  const [creating, setCreating] = useState(false)
   const platform = window.lexn.platform
   const newTabShortcut = shortcutLabel(effectiveShortcuts(browser.settings.keyboardShortcuts, platform).command, platform)
   const tabs = browser.tabs.filter(tab => tab.workspaceId === space.id)
@@ -112,6 +111,7 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
       {compact && !browser.settings.topToolbar ? <>
         <Tool label="Search or enter address" onClick={address}><Search size={16} /></Tool>
         <Tool label="Home" onClick={goHome}><House size={16} /></Tool>
+        <Tool label="Browser menu" onClick={openActions}><Ellipsis size={18} /></Tool>
       </> : chrome}
     </header>
     <div className="tabs-scroll spatial-scroll" key={space.id}>
@@ -138,22 +138,25 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
         {tabs.filter(tab => !tab.pinned).map(renderTab)}
       </section>
     </div>
-    <footer className="spatial-footer">
-      <ServiceRail page={page} open={open} />
-      <div className="space-strip">
-        <button type="button" className="space-name" title="Edit Space" aria-label="Edit Space" onClick={() => workspaceEditor(space)}>{space.icon || space.name}</button>
-        <nav className="profile-dots" aria-label="Browser profiles">
-          {browser.workspaces.map(item => <button key={item.id} type="button" title={item.name} aria-label={item.name} aria-pressed={item.id === space.id}
-            onClick={() => switchProfile(item.id)}><i style={{ '--dot': item.accent } as React.CSSProperties} /></button>)}
-        </nav>
-        <div className="space-add">
-          <Tool label="Add Space or profile" onClick={() => setCreating(!creating)}><Plus size={16} /></Tool>
-          {creating && <div className="space-add-menu">
-            <button type="button" onClick={() => { workspaceEditor(undefined, true); setCreating(false) }}>New Space</button>
-            <button type="button" onClick={() => { workspaceEditor(); setCreating(false) }}>New profile</button>
-          </div>}
-        </div>
-      </div>
-    </footer>
   </>
+}
+
+function ProfileStrip({ browser, space, switchProfile, workspaceEditor }: Pick<SidebarProps, 'browser' | 'space' | 'switchProfile' | 'workspaceEditor'>) {
+  const [creating, setCreating] = useState(false)
+  return <footer className="spatial-footer">
+    <div className="space-strip">
+      <button type="button" className="space-name" title="Edit Space" aria-label="Edit Space" onClick={() => workspaceEditor(space)}><span key={space.id}>{space.icon || space.name}</span></button>
+      <nav className="profile-dots" aria-label="Browser profiles">
+        {browser.workspaces.map(item => <button key={item.id} type="button" title={item.name} aria-label={item.name} aria-pressed={item.id === space.id}
+          onClick={() => switchProfile(item.id)}><i style={{ '--dot': item.accent } as React.CSSProperties} /></button>)}
+      </nav>
+      <div className="space-add">
+        <Tool label="Add Space or profile" onClick={() => setCreating(!creating)}><Plus size={16} /></Tool>
+        {creating && <div className="space-add-menu">
+          <button type="button" onClick={() => { workspaceEditor(undefined, true); setCreating(false) }}>New Space</button>
+          <button type="button" onClick={() => { workspaceEditor(); setCreating(false) }}>New profile</button>
+        </div>}
+      </div>
+    </div>
+  </footer>
 }

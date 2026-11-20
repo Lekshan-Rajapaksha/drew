@@ -242,10 +242,10 @@ export class Database {
       ON CONFLICT(profileId, key) DO UPDATE SET value = excluded.value`, profile, key, JSON.stringify(value))
   }
 
-  addWorkspace(id: string, name: string, accent: string, profile: string | null, icon: string) {
+  addWorkspace(id: string, name: string, accent: string, profile: string | null, icon: string, seed = true) {
     this.run('INSERT INTO workspaces (id, name, accent, activeTab, profileId, icon) VALUES (?, ?, ?, NULL, ?, ?)',
       id, name, accent, profile, icon)
-    if (!profile) this.seedFavorites(id)
+    if (!profile && seed) this.seedFavorites(id)
   }
 
   private seedFavorites(profile: string) {

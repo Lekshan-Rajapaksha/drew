@@ -1,16 +1,16 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
-import { open, readdir, stat } from 'node:fs/promises'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { isAbsolute, join } from 'node:path'
+import { basename, isAbsolute, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
 import type { BrowserBrand, BrowserImportSource } from '../../shared/model.js'
 
-type Link = { url: string; title: string; folder: string }
-type Entry = { url: string; title: string; visitedAt: number }
-type Source = BrowserImportSource & { path: string }
+export type Link = { url: string; title: string; folder: string }
+export type Entry = { url: string; title: string; visitedAt: number }
+export type Source = BrowserImportSource & { path: string }
 const maxFileSize = 16 * 1024 * 1024
 
 export async function readImportFile(path: string) {
@@ -50,14 +50,23 @@ export function exportedLinks(text: string, markdown = false): Link[] {
   const links: Link[] = []
   if (markdown) {
     const headings: { level: number; name: string }[] = []
+    const folders: { indent: number; name: string }[] = []
     for (const line of text.split(/\r?\n/)) {
       const heading = /^(#{1,6})\s+(.+)$/.exec(line)
       if (heading) {
         const level = heading[1].length
         while ((headings.at(-1)?.level ?? 0) >= level) headings.pop()
         headings.push({ level, name: heading[2].trim() })
+        folders.length = 0
       }
-      const folder = headings.map(item => item.name).join(' › ')
+      const bullet = /^([\t ]*)[-*+]\s+(.+)$/.exec(line)
+      if (bullet) {
+        const indent = bullet[1].replace(/\t/g, '    ').length
+        while ((folders.at(-1)?.indent ?? -1) >= indent) folders.pop()
+        const label = /^(?:\*\*([^*]+)\*\*:?|📁\s+(.+?))$/.exec(bullet[2].trim())
+        if (label) folders.push({ indent, name: (label[1] ?? label[2]).replace(/:$/, '').trim() })
+      }
+      const folder = [...headings.map(item => item.name), ...folders.map(item => item.name)].join(' › ')
       for (const link of line.matchAll(/\[([^\]]+)\]\((<https?:\/\/[^>]+>|https?:\/\/[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)\)/gi)) {
         addLink(links, link[2].replace(/^<|>$/g, ''), link[1], folder)
       }
@@ -77,7 +86,7 @@ export function exportedLinks(text: string, markdown = false): Link[] {
   return links
 }
 
-export function chromiumLinks(contents: string) {
+export function chromiumLinks(contents: string, toolbarOnly = false) {
   const parsed = JSON.parse(contents) as { roots?: Record<string, unknown> }
   const links: Link[] = []
   const walk = (node: unknown, folder: string, depth: number) => {
@@ -90,7 +99,12 @@ export function chromiumLinks(contents: string) {
       for (const child of item.children) walk(child, next, depth + 1)
     }
   }
-  for (const root of Object.values(parsed.roots ?? {})) walk(root, '', 0)
+  if (toolbarOnly) {
+    const bar = parsed.roots?.bookmark_bar as { children?: unknown } | undefined
+    if (Array.isArray(bar?.children)) for (const child of bar.children) {
+      if (child?.type === 'url') walk(child, '', 0)
+    }
+  } else for (const root of Object.values(parsed.roots ?? {})) walk(root, '', 0)
   return links
 }
 
@@ -126,24 +140,28 @@ export async function detectSources(): Promise<Source[]> {
       }
     }
   }
-  const lists = await Promise.all(roots.map(async ([name, root], index) => {
-    const parent = isAbsolute(root) ? root : join(base, root)
-    const dirs = await readdir(parent, { withFileTypes: true }).catch(() => [])
-    const localState = await readImportFile(join(parent, 'Local State')).then(contents => {
-      const state = JSON.parse(contents) as { profile?: { info_cache?: Record<string, { name?: unknown }> } }
-      return state.profile?.info_cache ?? {}
-    }).catch(() => ({} as Record<string, { name?: unknown }>))
-    const folders = ['', ...dirs.filter(item => item.isDirectory() && /^(Default|Profile [\d]+)$/.test(item.name))
-      .map(item => item.name).sort()]
-    return (await Promise.all(folders.map(async folder => {
-      const path = join(parent, folder)
-      const valid = await isFile(join(path, 'Bookmarks')) || await isFile(join(path, 'History'))
-      const label = localState[folder]?.name
-      return valid ? [{ id: index + ':' + folder, label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 70) : folder || 'Default',
-        browser: name, path }] : []
-    }))).flat()
-  }))
-  return lists.flat()
+  const lists = await Promise.all(roots.map(([name, root]) => scanChromiumProfiles(isAbsolute(root) ? root : join(base, root), name)))
+  return [...new Map(lists.flat().map(source => [source.id, source])).values()]
+}
+
+export async function scanChromiumProfiles(parent: string, browser: BrowserBrand): Promise<Source[]> {
+  const dirs = await readdir(parent, { withFileTypes: true }).catch(() => [])
+  const localState = await readImportFile(join(parent, 'Local State')).then(contents => {
+    const state = JSON.parse(contents) as { profile?: { info_cache?: Record<string, { name?: unknown }> } }
+    return state.profile?.info_cache ?? {}
+  }).catch(() => ({} as Record<string, { name?: unknown }>))
+  const folders = ['', ...dirs.filter(item => item.isDirectory() && /^(Default|Profile \d+)$/.test(item.name))
+    .map(item => item.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))]
+  return (await Promise.all(folders.map(async folder => {
+    const path = join(parent, folder)
+    const label = localState[folder]?.name
+    const hasData = await isFile(join(path, 'Bookmarks')) || await isFile(join(path, 'History'))
+    if (!hasData && !(await isFile(join(path, 'Preferences')))) return []
+    const canonical = await realpath(path).catch(() => path)
+    const id = createHash('sha256').update(canonical).digest('hex')
+    return [{ id, label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 64) : folder || basename(parent),
+      browser, path }]
+  }))).flat()
 }
 
 function chromiumHistory(path: string): Entry[] {
@@ -161,13 +179,17 @@ function chromiumHistory(path: string): Entry[] {
   } finally { source.close() }
 }
 
-export async function readChromium(path: string) {
+export async function readChromium(path: string, includeToolbar = false) {
   const notes: string[] = []
-  let links: Link[] = [], history: Entry[] = []
+  let links: Link[] = [], history: Entry[] = [], toolbar: Link[] = []
   const bookmarks = join(path, 'Bookmarks')
   const visits = join(path, 'History')
   if (await isFile(bookmarks)) {
-    try { links = chromiumLinks(await readImportFile(bookmarks)) }
+    try {
+      const contents = await readImportFile(bookmarks)
+      links = chromiumLinks(contents)
+      if (includeToolbar) toolbar = chromiumLinks(contents, true)
+    }
     catch { notes.push('Bookmarks could not be read.') }
   }
   if (await isFile(visits)) {
@@ -175,30 +197,32 @@ export async function readChromium(path: string) {
     catch { notes.push('History could not be read. Close the source browser and try again.') }
   }
   if (!links.length && !history.length && !notes.length) notes.push('No bookmarks or history were found in that folder.')
-  return { links, history, notes }
+  return { links, history, notes, toolbar }
 }
 
 export function saveImported(db: Database, profile: string, links: Link[], history: Entry[]) {
+  return db.transaction(() => mergeImported(db, profile, links, history))
+}
+
+export function mergeImported(db: Database, profile: string, links: Link[], history: Entry[]) {
   let bookmarks = 0, visits = 0
-  db.transaction(() => {
-    const folders = new Map<string, string>()
-    for (const link of links) {
-      let folder = folders.get(link.folder) ?? db.one<{ id: string }>('SELECT id FROM bookmark_folders WHERE name = ? AND workspaceId = ?', link.folder, profile)?.id
-      if (!folder && link.folder) {
-        folder = randomUUID()
-        db.run('INSERT INTO bookmark_folders VALUES (?, ?, ?)', folder, link.folder, profile)
-        folders.set(link.folder, folder)
-      }
-      if (db.one('SELECT id FROM bookmarks WHERE workspaceId = ? AND url = ? AND folderId IS ?', profile, link.url, folder ?? null)) continue
-      db.run('INSERT INTO bookmarks VALUES (?, ?, ?, ?, ?)', randomUUID(), link.title, link.url, folder ?? null, profile)
-      bookmarks++
+  const folders = new Map<string, string>()
+  for (const link of links) {
+    let folder = folders.get(link.folder) ?? db.one<{ id: string }>('SELECT id FROM bookmark_folders WHERE name = ? AND workspaceId = ?', link.folder, profile)?.id
+    if (!folder && link.folder) {
+      folder = randomUUID()
+      db.run('INSERT INTO bookmark_folders VALUES (?, ?, ?)', folder, link.folder, profile)
+      folders.set(link.folder, folder)
     }
-    for (const entry of history) {
-      if (db.one('SELECT id FROM history WHERE workspaceId = ? AND url = ? AND visitedAt = ?', profile, entry.url, entry.visitedAt)) continue
-      db.run('INSERT INTO history VALUES (?, ?, ?, ?, ?)', randomUUID(), entry.url, entry.title, entry.visitedAt, profile)
-      visits++
-    }
-  })
+    if (db.one('SELECT id FROM bookmarks WHERE workspaceId = ? AND url = ? AND folderId IS ?', profile, link.url, folder ?? null)) continue
+    db.run('INSERT INTO bookmarks VALUES (?, ?, ?, ?, ?)', randomUUID(), link.title, link.url, folder ?? null, profile)
+    bookmarks++
+  }
+  for (const entry of history) {
+    if (db.one('SELECT id FROM history WHERE workspaceId = ? AND url = ? AND visitedAt = ?', profile, entry.url, entry.visitedAt)) continue
+    db.run('INSERT INTO history VALUES (?, ?, ?, ?, ?)', randomUUID(), entry.url, entry.title, entry.visitedAt, profile)
+    visits++
+  }
   return { bookmarks, visits }
 }
 

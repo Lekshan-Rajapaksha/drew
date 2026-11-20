@@ -1,13 +1,14 @@
 import { randomUUID } from 'node:crypto'
 import { app, dialog, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
+import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type SavedTab, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
 import type { FloatingSidebar } from './floatingSidebar.js'
 import type { Tabs } from './tabs.js'
 import { showExtension } from './extensions.js'
-import { detectSources, exportedLinks, readChromium, readImportFile, saveImported } from './importData.js'
+import { detectSources, exportedLinks, readChromium, readImportFile, saveImported, scanChromiumProfiles } from './importData.js'
+import { chromiumProfile, markdownProfiles, saveBrowserProfiles } from './profileImport.js'
 import { copyPassword, importPasswords, savePassword } from './vault.js'
 import type { Downloads } from './profile.js'
 
@@ -88,6 +89,7 @@ export function bindIpc(
   window: BrowserWindow, uiUrl: string, db: Database, tabs: Tabs,
   downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll: () => boolean, newWindow: () => void,
   peerTabs: () => Tab[], focusWindowTab: (tabId: string) => void,
+  registerImported: (tabs: SavedTab[]) => void,
 ) {
   const state = () => browserState(db, tabs, downloads, window, peerTabs())
   const currentTab = (value: unknown) => {
@@ -362,8 +364,25 @@ export function bindIpc(
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
   invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label, browser }) => ({ id, label, browser })))
   invoke('lexn:import-browser', async (value, selected) => {
-    const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords'])
-    const profile = tabs.profileId
+    const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords', 'profiles', 'profile-folder', 'profile-markdown'])
+    const profile = kind === 'passwords' && selected !== undefined ? id(selected) : tabs.profileId
+    if (kind === 'passwords' && !db.one('SELECT id FROM workspaces WHERE id = ? AND profileId IS NULL', profile)) {
+      throw new Error('Choose a Drew Profile for these passwords.')
+    }
+    const brand = () => choice(selected, ['Chrome', 'Arc', 'Dia', 'Ardia', 'Opera', 'Opera GX', 'Edge', 'Brave', 'Vivaldi', 'Chromium'] as const)
+    const saveProfiles = (profiles: Parameters<typeof saveBrowserProfiles>[1]) => {
+      if (window.isDestroyed()) return null
+      const { results, createdTabs } = saveBrowserProfiles(db, profiles)
+      registerImported(createdTabs)
+      changed()
+      return results
+    }
+    if (kind === 'profiles') {
+      const browser = brand()
+      const sources = (await detectSources()).filter(source => source.browser === browser)
+      if (!sources.length) throw new Error('No local Profiles were found for this browser.')
+      return saveProfiles(await Promise.all(sources.map(chromiumProfile)))
+    }
     let path: string
     if (kind === 'browser') {
       const sourceId = text(selected, 256)
@@ -373,12 +392,23 @@ export function bindIpc(
     } else {
       const result = await dialog.showOpenDialog(window, {
         title: kind === 'passwords' ? 'Import saved accounts into Drew' : undefined,
-        properties: [kind === 'folder' ? 'openDirectory' : 'openFile'],
+        properties: [kind === 'folder' || kind === 'profile-folder' ? 'openDirectory' : 'openFile'],
         filters: kind === 'bookmarks' ? [{ name: 'Browser exports', extensions: ['html', 'htm', 'md'] }]
+          : kind === 'profile-markdown' ? [{ name: 'Profile or Space export', extensions: ['md'] }]
           : kind === 'passwords' ? [{ name: 'Passwords CSV', extensions: ['csv'] }] : undefined,
       })
       if (result.canceled || !result.filePaths[0]) return null
       path = result.filePaths[0]
+    }
+    if (kind === 'profile-folder') {
+      const sources = await scanChromiumProfiles(path, brand())
+      if (!sources.length) throw new Error('Choose a Chromium Profile folder or its User Data folder.')
+      return saveProfiles(await Promise.all(sources.map(chromiumProfile)))
+    }
+    if (kind === 'profile-markdown') {
+      const profiles = markdownProfiles(await readImportFile(path), brand())
+      if (!profiles.length) throw new Error('No Profiles, Spaces, or web links were found in this export.')
+      return saveProfiles(profiles)
     }
     if (kind === 'passwords') {
       const imported = await importPasswords(db, profile, path, () => !window.isDestroyed())

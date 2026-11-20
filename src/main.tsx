@@ -172,7 +172,7 @@ function Browser() {
   const showView = external && !overlay
   const floatsAboveWebsite = !welcome && !locked && (external || splitVisible) &&
     !modal && !palette && !context && !favoriteMenu
-  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 222 : 0) : 0
+  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 366 : 0) : 0
   const animate = browser?.settings.motion !== 'off' && !matchMedia('(prefers-reduced-motion: reduce)').matches
   const theme = browser?.settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : browser?.settings.theme ?? 'dark'
   const accent = browser?.settings.accentColor || themeAccents[theme] || space?.accent || accents[0]
@@ -184,7 +184,6 @@ function Browser() {
     '--sidebar-gap': SIDEBAR_VERTICAL_GAP + 'px', '--caption-inset': WINDOW_CONTROLS_INSET + 'px',
     '--caption-width': WINDOW_CONTROLS_WIDTH + 'px', '--sidebar-radius': SIDEBAR_RADIUS + 'px', '--sidebar-width': width + 'px', '--accent': accent, '--accent-end': accentEnd, '--color-intensity': intensity,
   } as CSSProperties
-  useLayoutEffect(() => { setSwipePreview(current => current?.id === space?.id ? null : current) }, [space?.id])
 
   useLayoutEffect(() => {
     const node = viewport.current
@@ -394,12 +393,14 @@ function Browser() {
     if (page || !active) void command('newTab', value)
     else void command('navigate', active.id, value)
   }
-  const switchProfile = (id: string, swipe?: number) => {
-    if (id === space?.id && swipe === undefined) return
-    if (swipe === undefined) cancelSwipe()
+  const changeProfile = (id: string) => {
     setPalette(null); setMenu(null); setEditing(false); setResults([]); setPage(null)
     setSplitIds([]); setContext(null); setFavoriteMenu(null)
-    void command('workspace', id).then(ok => { if (!ok) setSwipePreview(null) })
+    return command('workspace', id)
+  }
+  const switchProfile = (id: string) => {
+    cancelSwipe()
+    if (id !== space?.id) void changeProfile(id)
   }
   const newTab = () => { setMenu(null); setPalette('command') }
   const addSplit = (id: string) => {
@@ -410,7 +411,7 @@ function Browser() {
     if (!existing.includes(id) && existing.length < 4) setSplitIds([...existing, id])
     setPalette(null); setContext(null); setPage(null)
   }
-  const { cancelSwipe, ...gesture } = useSpaceGesture(spaces, space?.id ?? '', switchProfile, collapsed ? 0 : width, setSwipePreview, animate && !collapsed)
+  const { cancelSwipe, ...gesture } = useSpaceGesture(spaces, space?.id ?? '', changeProfile, collapsed ? 0 : width, setSwipePreview, animate && !collapsed)
   const confirm = (title: string, description: string, action: () => Promise<void>) =>
     setModal({ kind: 'confirm', title, description, action })
 
@@ -461,9 +462,10 @@ function Browser() {
     {!topToolbar && <div className="window-drag-zone" aria-hidden="true" />}
     {captionContent ? createPortal(controls, captionContent) : controls}
     <div className="sidebar-slot" ref={sidebarSlot} />
-    {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} open={open}
+    {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked}
       preview={animate && !collapsed ? swipePreview : null} compact={compact} systemDark={systemDark}
       address={() => { setMenu(null); setPalette('address') }}
+      openActions={newTab}
       goHome={goHome}
       pinPending={pendingPin !== null} pinSidebar={() => {
         if (pendingPin !== null) return
@@ -545,7 +547,11 @@ function Browser() {
         { label: 'Clear Cache', run: () => { setPalette(null); void command('clearData', 'cache') } },
         { label: 'Split View', run: () => setPalette('split') },
         ...(locked ? [] : [{ label: collapsed ? 'Show Sidebar' : 'Hide Sidebar', run: () => { setPalette(null); toggle() } }]),
+        { label: 'Bookmarks', run: () => open('bookmarks') },
+        { label: 'History', run: () => open('history') },
+        { label: 'Downloads', run: () => open('downloads') },
         { label: 'Archived Tabs', run: () => open('archive') },
+        { label: 'Page assistant', run: () => open('assistant') },
         { label: 'Passwords', run: () => open('passwords') },
         { label: 'Extensions', run: () => open('extensions') },
         ...browser.extensions.filter(extension => extension.popup).map(extension => ({

@@ -38,6 +38,11 @@ async function go(page, url) {
   await input.press('Enter')
 }
 
+async function openBrowserPage(page, name) {
+  await page.getByRole('button', { name: 'Browser menu', exact: true }).click()
+  await page.locator('.browser-menu').getByRole('button', { name, exact: true }).click()
+}
+
 async function activeView(app) {
   return app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
@@ -171,7 +176,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await waitUntil(async () => page.locator('.address-site-icon img').evaluate(img => img.complete && img.naturalWidth > 0), 'website favicon did not load')
   await page.getByRole('button', { name: 'Add page to Favorites' }).click()
   await page.getByRole('button', { name: 'Edit page favorite' }).waitFor()
-  assert.equal(await page.locator('.spatial-footer').getByRole('navigation', { name: 'Browser services' }).count(), 1)
+  assert.equal(await page.getByRole('navigation', { name: 'Browser services' }).count(), 0)
   await page.getByRole('button', { name: 'Browser menu' }).click()
   await page.getByRole('button', { name: 'Show top toolbar' }).click()
   await page.locator('.toolbar-top').waitFor()
@@ -246,8 +251,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.mouse.up()
   await waitUntil(async () => (await getState(page)).settings.sidebarWidth === '320', 'sidebar width was not saved')
   await waitUntil(async () => (await geometry()).website?.x === 320, 'the pinned sidebar did not reserve its resized width')
-  const services = page.getByRole('navigation', { name: 'Browser services' })
-  await services.getByRole('button', { name: 'Settings' }).click()
+  await openBrowserPage(page, 'Settings')
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   const keepOpen = page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' })
   await keepOpen.uncheck()
@@ -341,7 +345,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
     const view = BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith('http:'))
     return view.webContents.executeJavaScript('document.getElementById("download").click()', true)
   })
-  await page.getByRole('button', { name: 'Downloads', exact: true }).click()
+  await openBrowserPage(page, 'Downloads')
   await page.getByRole('button', { name: 'Reveal lexn-smoke.txt' }).waitFor()
   assert.equal(await readFile(join(profile, 'downloads', 'lexn-smoke.txt'), 'utf8'), 'LexN real download\n')
   assert.equal(await activeView(app), null)
@@ -351,12 +355,12 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
     const view = BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith('http:'))
     return view.webContents.executeJavaScript('document.getElementById("slow").click()', true)
   })
-  await page.getByRole('button', { name: 'Downloads', exact: true }).click()
+  await openBrowserPage(page, 'Downloads')
   await page.getByRole('button', { name: 'Cancel lexn-slow.bin' }).click()
   await waitUntil(async () => (await getState(page)).downloads.some(item => item.name === 'lexn-slow.bin' && item.state === 'cancelled'),
     'Chromium download cancellation was not saved')
 
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openBrowserPage(page, 'Settings')
   await page.getByRole('button', { name: 'Cookies', exact: true }).click()
   await page.getByText('lexn_fixture', { exact: true }).waitFor()
   await page.getByRole('button', { name: 'Remove cookie lexn_fixture' }).click()
@@ -421,7 +425,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await tile.dragTo(favorites.getByRole('button', { name: 'Google' }))
   await waitUntil(async () => (await getState(page)).favorites[0].title === 'Fixture Favorite', 'favorite did not move')
   assert.equal(await favorites.getByRole('combobox', { name: 'Favorite icon size' }).count(), 0)
-  await page.getByRole('navigation', { name: 'Browser services' }).getByRole('button', { name: 'Settings' }).click()
+  await openBrowserPage(page, 'Settings')
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   await page.getByRole('combobox', { name: 'Favorite icon size' }).selectOption('small')
   await page.locator('.favorites-small').waitFor()
@@ -436,7 +440,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await favorites.getByRole('button', { name: 'Music' }).waitFor({ state: 'detached' })
   await page.locator(`[data-tab-id="${one.id}"]`).dragTo(favorites.getByRole('button', { name: 'Add or drop favorite' }))
   await waitUntil(async () => (await getState(page)).favorites.some(item => item.url === origin + '/two'), 'tab drag did not add a favorite')
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openBrowserPage(page, 'Settings')
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('black')
   await page.locator('.browser.black').waitFor()
@@ -487,7 +491,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Personal' }, 'horizontal swipe did not advance to Personal')
   for (let packet = 0; packet < 7; packet++) {
     await sleep(110)
-    const surface = packet % 2 ? '.sidebar-slide:not(.sidebar-swipe-next) .spatial-footer' : '.spatial-sidebar'
+    const surface = packet % 2 ? '.spatial-footer' : '.spatial-sidebar'
     await page.locator(surface).dispatchEvent('wheel', { deltaX: 95, deltaY: 36 })
     assert.equal((await getState(page)).workspaceId, (await getState(page)).workspaces[0].id)
   }
@@ -557,7 +561,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await go(page, origin + '/one')
   await waitUntil(async () => (await active(page)).title === 'LexN Fixture One', 'shared-space navigation failed')
   await page.getByRole('button', { name: 'Clear', exact: true }).click()
-  await page.getByRole('button', { name: 'Archived tabs' }).click()
+  await openBrowserPage(page, 'Archived tabs')
   await page.locator('.record-link').filter({ hasText: 'LexN Fixture One' }).click()
   await waitUntil(async () => (await active(page)).url === origin + '/one', 'could not restore archived tab')
   await page.getByRole('button', { name: 'Research', exact: true }).click()
@@ -594,9 +598,9 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   assert.ok(restored.tabs.some(tab => tab.id === one.id && tab.pinned === 1))
   await page.locator(`[data-tab-id="${two.id}"]`).click()
   await waitUntil(async () => await activeView(app) === origin + '/two', 'workspace tab was not reattached')
-  await page.getByRole('navigation', { name: 'Browser services' }).getByRole('button', { name: 'Bookmarks', exact: true }).click()
+  await openBrowserPage(page, 'Bookmarks')
   await page.locator('.record-link').filter({ hasText: 'LexN Fixture Two' }).waitFor()
-  await page.getByRole('button', { name: 'History', exact: true }).click()
+  await openBrowserPage(page, 'History')
   await page.getByRole('searchbox', { name: 'Search history' }).fill('Fixture Two')
   await page.locator('.record-link').filter({ hasText: 'LexN Fixture Two' }).first().waitFor()
 
@@ -674,6 +678,23 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   await picker.click()
   await page.getByText('Imported 1 bookmark into Personal.').waitFor()
   assert.equal((await getState(page)).bookmarks.length, 1)
+  const arcExport = join(profile, 'arc-data-export.md')
+  await writeFile(arcExport, '# Arc Data Export\n## Space: Studio\nColor: #864fb0\n### Favorites\n- [Studio mail](https://example.org/mail)\n### Pinned Tabs\n- [Studio desk](https://example.org/desk)\n## Space: Training\n### Today\n- [Course](https://example.org/course)')
+  await app.evaluate(({ dialog }, path) => {
+    const original = dialog.showOpenDialog
+    dialog.showOpenDialog = async () => {
+      dialog.showOpenDialog = original
+      return { canceled: false, filePaths: [path] }
+    }
+  }, arcExport)
+  await page.getByRole('button', { name: 'Import Profiles or Spaces' }).click()
+  await page.getByText(/Profiles imported: Studio, Training.*1 Favorite.*1 pinned tab.*1 open tab/).waitFor()
+  const migrated = await getState(page)
+  const studio = migrated.workspaces.find(space => space.name === 'Studio')
+  assert.equal(studio.accent, '#864fb0')
+  assert.ok(migrated.sidebarPreviews[studio.id].tabs.some(tab => tab.title === 'Studio desk' && tab.pinned === 1))
+  assert.ok(migrated.sidebarPreviews[studio.id].favorites.some(favorite => favorite.title === 'Studio mail'))
+  assert.equal(await page.getByLabel('Password destination Profile').inputValue(), '')
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   const layouts = page.getByRole('group', { name: 'Navigation layout' })
   assert.equal(await layouts.locator('.layout-preview').count(), 3)
@@ -696,7 +717,7 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   await page.getByRole('button', { name: 'General', exact: true }).click()
   await page.getByRole('button', { name: 'Open home page', exact: true }).click()
   await page.getByRole('heading', { name: 'Drew' }).waitFor()
-  await page.getByRole('button', { name: 'Settings', exact: true }).click()
+  await openBrowserPage(page, 'Settings')
   await page.getByRole('button', { name: 'Home', exact: true }).click()
   await page.getByRole('heading', { name: 'Drew' }).waitFor()
 
@@ -725,14 +746,20 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   assert.equal((await active(page)).id, firstTab.id)
   assert.ok((await getState(second)).otherWindowTabs.length === 0, 'the Work Profile saw Personal tabs')
   await second.evaluate(() => window.lexn.command('windowAction', 'close')).catch(() => {})
-  await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 30, deltaY: 0 })
+  const footer = page.locator('.spatial-footer')
+  const position = await footer.boundingBox()
+  await footer.dispatchEvent('wheel', { deltaX: 30, deltaY: 0 })
   const incoming = page.locator('.sidebar-swipe-next')
   assert.equal(await incoming.locator('[aria-label="Work favorite"]').count(), 1)
   assert.equal(await incoming.locator('.spatial-header').count(), 1)
-  assert.equal(await incoming.locator('.spatial-footer').count(), 1)
+  assert.equal(await incoming.locator('.spatial-footer').count(), 0)
+  assert.deepEqual(await footer.boundingBox(), position)
+  assert.equal(await footer.getByRole('button', { name: 'Personal', exact: true }).getAttribute('aria-pressed'), 'true')
   assert.equal((await getState(page)).workspaceId, personal.workspaceId)
   await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 60, deltaY: 0 })
   await page.getByRole('button', { name: 'Work favorite', exact: true }).waitFor()
+  assert.deepEqual(await footer.boundingBox(), position)
+  assert.equal(await footer.getByRole('button', { name: 'Work', exact: true }).getAttribute('aria-pressed'), 'true')
   assert.equal((await getState(page)).workspaceId, personal.workspaces[1].id)
 })
 
@@ -794,10 +821,12 @@ test('password imports keep each account in its Profile and reject reassigned en
     db.prepare('INSERT INTO saved_logins VALUES (?, ?, ?, ?, ?)').run(legacyId, state.profileId, 'https://legacy.example', 'legacy', oldBlob)
     await page.evaluate(id => window.lexn.command('copyLogin', id), legacyId)
     assert.match(db.prepare('SELECT encrypted FROM saved_logins WHERE id = ?').get(legacyId).encrypted, /^account-v1:/)
+    await page.getByLabel('Password destination Profile').selectOption(state.workspaces[1].id)
+    await picker.click()
+    await page.getByText(/Imported 2 passwords into Work/).waitFor()
+    assert.equal((await getState(page)).passwords.length, 3)
     await page.evaluate(id => window.lexn.command('workspace', id), state.workspaces[1].id)
-    assert.deepEqual((await getState(page)).passwords, [])
     await assert.rejects(page.evaluate(id => window.lexn.command('copyLogin', id), alice.id), /not found in this Profile/)
-    await page.evaluate(() => window.lexn.importBrowserData('passwords'))
     state = await getState(page)
     assert.equal(state.passwords.length, 2)
     assert.notEqual(state.passwords[0].id, alice.id)

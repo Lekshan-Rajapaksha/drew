@@ -79,8 +79,11 @@ export interface ViewRect { x: number; y: number; width: number; height: number 
 export interface PaneRect extends ViewRect { id: string }
 export type BrowserBrand = 'Chrome' | 'Arc' | 'Dia' | 'Ardia' | 'Opera' | 'Opera GX' | 'Edge' | 'Brave' | 'Vivaldi' | 'Chromium'
 export interface BrowserImportSource { id: string; label: string; browser: BrowserBrand }
-export interface BrowserImportResult { bookmarks: number; visits: number; passwords: number; notes: string[] }
-export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords'
+export interface BrowserImportResult {
+  bookmarks: number; visits: number; passwords: number; notes: string[]
+  profiles?: { id: string; name: string }[]; favorites?: number; pinned?: number; tabs?: number
+}
+export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords' | 'profiles' | 'profile-folder' | 'profile-markdown'
 
 export interface ProfileExtension { id: string; name: string; version: string; popup: boolean }
 export interface SavedLogin { id: string; origin: string; username: string }

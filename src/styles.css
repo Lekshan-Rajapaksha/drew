@@ -430,15 +430,13 @@ button.record-link:hover strong { text-decoration: underline; }
 .spatial-sidebar .tab-row.selected { background: color-mix(in srgb, var(--accent) 12%, var(--chrome)); }
 .group-content { margin-left: 8px; padding-left: 3px; border-left: 1px solid var(--line); }
 .group-heading span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.spatial-footer { border-top: 1px solid var(--line); padding-top: 4px; }
-.spatial-footer .side-footer { display: flex; align-items: center; justify-content: space-between; gap: 3px; padding: 2px 3px 4px; border: 0; }
-.spatial-footer .side-link { width: 32px; min-height: 27px; display: grid; place-items: center; padding: 0; }
+.spatial-footer { position: relative; z-index: 2; flex: none; border-top: 1px solid var(--line); padding-top: 4px; }
 .space-strip { display: grid; grid-template-columns: minmax(34px, 1fr) minmax(20px, auto) minmax(30px, 1fr); gap: 4px; align-items: center; min-height: 33px; }
 .space-name { text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 4px; color: var(--muted); font-size: 11px; }
-.profile-dots { display: flex; overflow-x: auto; max-width: 112px; scrollbar-width: none; }
+.profile-dots { display: flex; flex-wrap: wrap; justify-content: center; overflow: hidden auto; max-width: 112px; max-height: 66px; scrollbar-width: none; }
 .profile-dots button { flex: none; width: 15px; height: 22px; display: grid; place-items: center; }
 .profile-dots i { width: 6px; height: 6px; border-radius: 100%; background: color-mix(in srgb, var(--dot) 30%, #53545f); }
-.profile-dots button[aria-pressed=true] i { width: 8px; height: 8px; background: var(--dot); box-shadow: 0 0 8px color-mix(in srgb, var(--dot) 55%, transparent); }
+.profile-dots button[aria-pressed=true] i { background: var(--dot); box-shadow: 0 0 8px color-mix(in srgb, var(--dot) 55%, transparent); }
 .space-add { position: relative; justify-self: end; }
 .space-add-menu { position: absolute; bottom: 100%; right: 0; width: 138px; z-index: 8; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; }
 .space-add-menu button { display: block; padding: 7px 8px; width: 100%; text-align: left; border-radius: 5px; }
@@ -524,18 +522,6 @@ button.record-link:hover strong { text-decoration: underline; }
 .floating-sidebar .spatial-sidebar { box-shadow: none; }
 .floating-sidebar .spatial-sidebar.collapsed {
   transform: none; opacity: 1; visibility: visible; transition: none;
-}
-.service-rail { min-width: 0; padding: 3px 1px 5px; }
-.rail-services { display: flex; justify-content: space-between; align-items: center; gap: 4px; }
-.rail-services .icon-button { width: 31px; height: 30px; }
-.service-icon { --service: var(--ambient); color: color-mix(in srgb, var(--service) 75%, var(--muted)); }
-.service-icon[data-service="1"] { --service: #80baff; }
-.service-icon[data-service="2"] { --service: #72e3ba; }
-.service-icon[data-service="3"] { --service: #f9b97b; }
-.service-icon[data-service="4"] { --service: #fc91b5; }
-:is(.light, .rose, .sky, .mint, .lavender) .service-icon { color: color-mix(in srgb, var(--service) 25%, var(--text)); }
-.service-icon[aria-current="page"], .service-icon:hover {
-  background: color-mix(in srgb, var(--service) 18%, var(--chrome)); color: var(--text);
 }
 .spatial-sidebar {
   transition: transform .3s cubic-bezier(.33, 0, .67, 1), opacity .24s ease, visibility 0s;
@@ -658,7 +644,9 @@ button.record-link:hover strong { text-decoration: underline; }
 .sidebar-pin[aria-pressed="true"] { color: var(--accent); background: var(--selected); }
 .sidebar-pin[aria-pressed="true"] svg { transform: rotate(0) scale(1.08); }
 .profile-dots i { transition: transform .27s var(--spatial-ease), background-color .22s ease, box-shadow .24s ease; }
-.profile-dots [aria-pressed="true"] i { transform: scale(1.15); }
+.profile-dots [aria-pressed="true"] i { transform: scale(1.4); }
+.space-name > span { animation: profile-name-in .18s ease-out both; }
+@keyframes profile-name-in { from { opacity: .45; } }
 
 .spatial-browser.motion-off, .spatial-browser.motion-off :not(.spinner) {
   animation-duration: 0s !important;
@@ -736,6 +724,7 @@ button.record-link:hover strong { text-decoration: underline; }
   --selected: color-mix(in srgb, var(--ambient) 13%, var(--side));
 }
 @starting-style {
+  .sidebar-swipe-current { transform: translateX(0) !important; }
   .sidebar-swipe-next { transform: translateX(var(--swipe-edge)) !important; }
 }
 .sidebar-swipe-next .address span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -759,8 +748,6 @@ button.record-link:hover strong { text-decoration: underline; }
   justify-content: center; padding-inline: 0;
 }
 .compact-sidebar .group-content { padding-inline: 0; border: 0; }
-.compact-sidebar .rail-services { display: grid; grid-template-columns: 1fr; justify-items: center; gap: 1px; }
-.compact-sidebar .rail-services .icon-button { height: 25px; }
 .compact-sidebar .space-strip { display: flex; flex-direction: column; gap: 2px; padding-inline: 0; }
 .compact-sidebar .profile-dots { flex-wrap: wrap; justify-content: center; gap: 0; }
 .compact-sidebar .profile-dots button { width: 15px; }

@@ -55,6 +55,10 @@ export class Tabs {
     return this.db.one<{ profileId: string | null }>('SELECT profileId FROM workspaces WHERE id = ?', id)?.profileId ?? id
   }
   get profileId() { return this.storageFor(this.workspaceId) }
+  get managesSavedTabs() { return this.restoreSession }
+  registerImported(records: SavedTab[]) {
+    for (const record of records) if (!this.tabs.has(record.id)) this.register(record)
+  }
   list() { return [...this.tabs.values()].map(tab => tab.state).sort((a, b) => a.position - b.position) }
   active() {
     const id = this.activeBySpace.get(this.workspaceId)
