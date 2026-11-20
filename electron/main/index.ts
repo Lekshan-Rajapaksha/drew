@@ -31,12 +31,17 @@ if (testProfile) app.setPath('downloads', join(testProfile, 'downloads'))
 if (process.platform === 'win32') app.setAppUserModelId('com.lexn.browser')
 app.enableSandbox()
 
-let window: BrowserWindow | null = null
+const windows = new Map<number, { browser: BrowserWindow; preview: (url: string) => void; changed: () => void; tabs: Tabs }>()
+let currentWindowId: number | undefined
+let scrollOwner: { id: number; stop: () => void } | undefined
+const currentWindow = () => (currentWindowId === undefined ? undefined : windows.get(currentWindowId)) ?? [...windows.values()].at(-1)
+const notifyWindows = () => { for (const entry of windows.values()) entry.changed() }
 let database: Database | null = null
 let downloads: Downloads | null = null
 let shellReady = false
 
 function foreground() {
+  const window = currentWindow()?.browser
   if (!window || window.isDestroyed()) return
   if (isMac && app.isHidden()) app.show()
   if (window.isMinimized()) window.restore()
@@ -46,9 +51,10 @@ function foreground() {
   target.focus()
 }
 
-function createWindow() {
+function createWindow(initialSpace?: string) {
   const db = database ??= new Database(join(app.getPath('userData'), 'lexn.sqlite'))
-  const browser = window = new BrowserWindow({
+  const restoreSession = windows.size === 0
+  const browser = new BrowserWindow({
     width: 1400, height: 920, minWidth: 750, minHeight: 540, show: false,
     title: 'Drew', backgroundColor: '#101017',
     titleBarStyle: 'hidden',
@@ -80,8 +86,7 @@ function createWindow() {
       }
     })
   }
-  downloads ??= new Downloads(db, () => notifyWindow?.())
-  notifyWindow = changed
+  downloads ??= new Downloads(db, notifyWindows)
   const shortcut = (name: Shortcut) => {
     if (browser.isDestroyed()) return
     browser.webContents.focus()
@@ -103,6 +108,9 @@ function createWindow() {
     event.preventDefault()
     const current = tabs.active()?.state.id
     switch (action) {
+      case 'newWindow':
+        createWindow(tabs.workspaceId)
+        break
       case 'closeTab':
         if (current) tabs.close(current)
         shortcut('browse')
@@ -127,8 +135,21 @@ function createWindow() {
   }
   const sidebar = new FloatingSidebar(browser, wireKeys)
   const tabs: Tabs = new Tabs(browser, db, id => downloads!.sessionFor(id), changed,
-    view => { wireKeys(view.webContents) }, view => sidebar.addWebsite(view), preview)
-  externalLink = preview
+    view => { wireKeys(view.webContents) }, view => sidebar.addWebsite(view), preview, restoreSession, initialSpace)
+  const windowId = browser.id
+  windows.set(windowId, { browser, preview, changed, tabs })
+  currentWindowId = windowId
+  let nativeSpaceScroll = false
+  const trackFocusedWindow = () => {
+    currentWindowId = windowId
+    if (scrollOwner?.id === windowId) return
+    scrollOwner?.stop()
+    const stop = monitorSpaceScroll(browser, uiUrl)
+    scrollOwner = stop ? { id: windowId, stop } : undefined
+    nativeSpaceScroll = Boolean(stop)
+  }
+  trackFocusedWindow()
+  browser.on('focus', trackFocusedWindow)
   tabs.archive(true)
   let lastPointer: number | null | undefined
   const pointerTimer = setInterval(() => {
@@ -146,8 +167,8 @@ function createWindow() {
     browser.webContents.send('lexn:pointer', pointer)
   }, 33)
   const archiveTimer = setInterval(() => tabs.archive(true), 60_000)
-  const stopSpaceScroll = monitorSpaceScroll(browser, uiUrl)
-  const unbind = bindIpc(browser, uiUrl, db, tabs, downloads, changed, sidebar, Boolean(stopSpaceScroll))
+  bindIpc(browser, uiUrl, db, tabs, downloads, notifyWindows, sidebar, () => nativeSpaceScroll,
+    () => { createWindow(tabs.workspaceId) })
   wireKeys(browser.webContents)
   browser.webContents.setWindowOpenHandler(details => {
     if (details.url !== 'about:blank' || browser.webContents.getURL() !== uiUrl) return { action: 'deny' }
@@ -179,22 +200,25 @@ function createWindow() {
   browser.webContents.on('will-attach-webview', event => event.preventDefault())
   browser.once('ready-to-show', () => { if (!browser.isVisible()) browser.show() })
   browser.on('resize', () => { sidebar.resize(); placeCaption() })
-  for (const event of ['maximize', 'unmaximize', 'enter-full-screen', 'leave-full-screen'] as const) {
-    browser.on(event, () => { placeCaption(); changed() })
-  }
+  const updateWindowControls = () => { placeCaption(); changed() }
+  browser.on('maximize', updateWindowControls)
+  browser.on('unmaximize', updateWindowControls)
+  browser.on('enter-full-screen', updateWindowControls)
+  browser.on('leave-full-screen', updateWindowControls)
   browser.on('close', () => {
     clearInterval(archiveTimer)
     clearInterval(pointerTimer)
-    stopSpaceScroll?.()
+    if (scrollOwner?.id === windowId) {
+      scrollOwner.stop()
+      scrollOwner = undefined
+    }
     tabs.dispose()
     sidebar.dispose()
     captionView?.webContents.close()
   })
   browser.on('closed', () => {
-    unbind()
-    window = null
-    notifyWindow = null
-    externalLink = null
+    windows.delete(windowId)
+    if (currentWindowId === windowId) currentWindowId = undefined
   })
   void browser.loadURL(uiUrl).then(() => {
     if (!browser.isDestroyed() && !browser.isVisible() && !browser.isMinimized()) browser.show()
@@ -202,20 +226,19 @@ function createWindow() {
     if (browser.isDestroyed()) return
     console.error('Drew shell failed to load:', error)
     dialog.showErrorBox('Drew could not load the interface', String(error))
-    app.quit()
+    browser.close()
   })
   return preview
 }
-let externalLink: ((url: string) => void) | null = null
 let pendingExternal: string | null = null
-let notifyWindow: (() => void) | null = null
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()
 } else {
   const receive = (url: string) => {
     if (!webUrl(url)) return
-    if (externalLink) externalLink(url)
+    const target = currentWindow()
+    if (target) target.preview(url)
     else if (shellReady) createWindow()(url)
     else pendingExternal = url
   }
@@ -224,7 +247,7 @@ if (!app.requestSingleInstanceLock()) {
     const url = argv.find(value => webUrl(value))
     if (url) receive(url)
     if (!shellReady) return
-    if (!window) createWindow()
+    if (!currentWindow()) createWindow()
     else foreground()
   })
   app.whenReady().then(() => {
@@ -250,13 +273,14 @@ if (!app.requestSingleInstanceLock()) {
         { type: 'separator' }, { role: 'hide', label: 'Hide Drew' }, { role: 'hideOthers' }, { role: 'unhide' },
         { type: 'separator' }, { role: 'quit', label: 'Quit Drew' },
       ] },
+      { label: 'File', submenu: [{ label: 'New Window', accelerator: 'Command+N', click: () => createWindow(currentWindow()?.tabs.workspaceId) }] },
       { role: 'editMenu' }, { role: 'windowMenu' },
     ]) : null)
     shellReady = true
     createWindow()
     const initial = pendingExternal ?? process.argv.find(value => webUrl(value))
     if (initial) receive(initial)
-    app.on('activate', () => { if (!window) createWindow(); else foreground() })
+    app.on('activate', () => { if (!currentWindow()) createWindow(); else foreground() })
   }).catch(error => {
     console.error('Drew failed to start:', error)
     dialog.showErrorBox('Drew could not start', String(error))

@@ -40,6 +40,21 @@ const showShell = async () => {
 try {
   app = await electron.launch({ executablePath, args })
   const page = await showShell()
+  const intro = page.getByRole('dialog', { name: 'Welcome to Drew' })
+  await intro.waitFor()
+  assert.deepEqual((await page.evaluate(() => window.lexn.getState())).workspaces.map(space => space.name), ['Personal', 'Work'])
+  if (process.env.DREW_WELCOME_SCREENSHOT) {
+    await waitFor(() => intro.locator('.welcome-work').evaluate(card => getComputedStyle(card).opacity === '1'),
+      'the first-run animation did not reveal the starter Profiles')
+    await page.screenshot({ path: process.env.DREW_WELCOME_SCREENSHOT })
+  }
+  await intro.getByRole('button', { name: 'Open Drew' }).click()
+  await intro.waitFor({ state: 'detached' })
+  const starterState = await page.evaluate(() => window.lexn.getState())
+  assert.equal(starterState.settings.theme, 'black')
+  await page.evaluate(id => window.lexn.command('workspace', id), starterState.workspaces[1].id)
+  await page.locator('.browser.light').waitFor()
+  await page.evaluate(id => window.lexn.command('workspace', id), starterState.workspaceId)
   await page.getByRole('heading', { name: 'Drew' }).waitFor()
   assert.equal((await page.locator('.home').boundingBox()).y, 0)
   const wordmark = page.getByRole('img', { name: 'Drew' })
@@ -79,7 +94,8 @@ try {
     BrowserWindow.getAllWindows()[0].hide()
     app.emit('activate')
   })
-  await showShell()
+  const reopenedStarter = await showShell()
+  assert.equal((await reopenedStarter.evaluate(() => window.lexn.getState())).welcomePending, false)
   console.log('Activation restored the hidden browser window.')
 
   await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].hide())
@@ -113,10 +129,14 @@ try {
     const url = 'http://127.0.0.1:' + server.address().port + '/reading'
     app = await electron.launch({ executablePath: resolve(previousExecutable), args: upgradeArgs })
     const oldShell = await showShell()
+    if ((await oldShell.evaluate(() => window.lexn.getState())).welcomePending) {
+      await oldShell.evaluate(() => window.lexn.command('finishWelcome'))
+    }
     await oldShell.evaluate(async url => {
       const { workspaces, workspaceId, profileId } = await window.lexn.getState()
       const other = workspaces.find(space => space.id !== profileId && space.profileId === null)
       await window.lexn.command('workspace', other.id)
+      await window.lexn.command('setSetting', 'theme', 'dark')
       await window.lexn.command('setSetting', 'keepSidebarOpen', true)
       await window.lexn.command('setSetting', 'sidebarWidth', '348')
       await window.lexn.command('workspace', workspaceId)

@@ -6,8 +6,9 @@ import { command, type Page } from './state'
 import { ServiceRail } from './ServiceRail'
 import { Favorites } from './Favorites'
 import { Favicon, Tool } from './ui'
+import type { SwipePreview } from './useSpaceGesture'
 
-export function Sidebar({ browser, space, active, page, collapsed, locked, pinPending, pinSidebar, open, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite }: {
+export function Sidebar({ browser, space, active, page, collapsed, locked, pinPending, pinSidebar, open, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, preview, entryDirection }: {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
   pinPending: boolean; pinSidebar: () => void; open: (page: Page) => void; select: (id: string) => void; newTab: () => void
   workspaceEditor: (space?: Workspace, sameProfile?: boolean) => void; groupEditor: (parent?: string) => void;
@@ -15,6 +16,7 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, pinPe
   context: (event: React.MouseEvent, tab: Tab) => void; resize: (event: React.PointerEvent<HTMLDivElement>) => void
   dragTab: (id: string | null) => void; openFavorite: (id: string) => void;
   favoriteMenu: (event: React.MouseEvent, favorite: Favorite) => void; editFavorite: (favorite?: Favorite) => void
+  preview: SwipePreview | null; entryDirection: number;
 }) {
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
@@ -23,6 +25,9 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, pinPe
   const newTabShortcut = shortcutLabel(effectiveShortcuts(browser.settings.keyboardShortcuts, platform).command, platform)
   const tabs = browser.tabs.filter(tab => tab.workspaceId === space.id)
   const groups = browser.groups.filter(group => group.workspaceId === space.id)
+  const neighbor = preview && browser.workspaces.find(item => item.id === preview.id)
+  const incoming = neighbor && browser.favoritePreviews[neighbor.profileId ?? neighbor.id]
+  const shift = preview && incoming ? preview.direction * preview.progress * 100 : 0
   const renderTab = (tab: Tab) => <div key={tab.id} className={'tab-row' + (tab.id === active?.id && !page ? ' selected' : '') + (dragging === tab.id ? ' dragging' : '')}
     draggable onDragStart={event => {
       event.dataTransfer.setData('application/x-lexn-tab', tab.id)
@@ -70,9 +75,17 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, pinPe
       </button>
       {chrome}
     </header>
-    <div className="tabs-scroll spatial-scroll" key={space.id}>
-      <Favorites items={browser.favorites} size={browser.settings.favoriteSize} activeUrl={active?.url}
-        open={openFavorite} edit={editFavorite} menu={favoriteMenu} />
+    <div className="tabs-scroll spatial-scroll" key={space.id} style={{ '--entry-shift': entryDirection * 24 + 'px' } as React.CSSProperties}>
+      <div className="favorites-carousel">
+        <div className="favorites-swipe-current" style={{ transform: `translateX(${-shift}%)` }}>
+          <Favorites items={browser.favorites} size={browser.settings.favoriteSize} activeUrl={active?.url}
+            open={openFavorite} edit={editFavorite} menu={favoriteMenu} />
+        </div>
+        {incoming && preview && <div className="favorites-swipe-next" inert aria-hidden="true"
+          style={{ transform: `translateX(${preview.direction * 100 - shift}%)` }}>
+          <Favorites items={incoming.items} size={incoming.size} open={() => {}} edit={() => {}} menu={() => {}} />
+        </div>}
+      </div>
       <section className="tab-tier" aria-label="Pinned tabs">
         <div className="side-label">Pinned<Tool label="Create tab group" onClick={() => groupEditor()}><Plus size={14} /></Tool></div>
         {groups.filter(group => !group.parentId).map(renderFolder)}

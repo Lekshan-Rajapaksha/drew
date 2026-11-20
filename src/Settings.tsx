@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { Cookie, FolderOpen, Settings2, Shield, Trash2 } from 'lucide-react'
 import type { BrowserState, Permission, Settings as Preferences, SiteCookie } from '../shared/model'
-import { HOME } from '../shared/model'
+import { HOME, profileThemes, themeAccents } from '../shared/model'
 import { AccentPicker } from './AccentPicker'
+import { BrowserImport } from './BrowserImport'
 import { KeyboardSettings } from './KeyboardSettings'
 import { Empty, Filter, PageHeader } from './Library'
 import { command, useApp } from './state'
@@ -14,17 +15,26 @@ function Setting({ label, detail, children }: { label: string; detail?: string; 
   return <div className="setting"><div><strong>{label}</strong>{detail && <p>{detail}</p>}</div><div className="setting-control">{children}</div></div>
 }
 
-const sections = ['General', 'Appearance', 'New Tab', 'Privacy', 'Notifications', 'Keyboard Shortcuts', 'Cookies', 'About'] as const
+const sections = ['General', 'Appearance', 'New Tab', 'Privacy', 'Notifications', 'Keyboard Shortcuts', 'Cookies', 'Import', 'About'] as const
 export type SettingsSection = typeof sections[number]
 
-export function Settings({ browser, confirm, section, setSection }: {
-  browser: BrowserState; confirm: Confirm; section: SettingsSection; setSection: (section: SettingsSection) => void
+const gradients = [
+  { name: 'Aurora', start: '#7b81ff', end: '#50e2d6' },
+  { name: 'Orchid', start: '#f5a5ca', end: '#ab86f0' },
+  { name: 'Sunset', start: '#ffbd82', end: '#f079a0' },
+  { name: 'Glacier', start: '#a2dcff', end: '#6b9af1' },
+  { name: 'Canopy', start: '#96dca4', end: '#48a5a3' },
+]
+
+export function Settings({ browser, confirm, section, setSection, goHome }: {
+  browser: BrowserState; confirm: Confirm; section: SettingsSection; setSection: (section: SettingsSection) => void; goHome: () => void
 }) {
   const settings = browser.settings
   const space = browser.workspaces.find(item => item.id === browser.workspaceId)
   const profile = browser.workspaces.find(item => item.id === browser.profileId)
-  const resolvedAccent = settings.accentColor || space?.accent || '#b5a2ff'
+  const resolvedAccent = settings.accentColor || themeAccents[settings.theme] || space?.accent || '#b5a2ff'
   const [homepage, setHomepage] = useState(settings.homepage === HOME ? '' : settings.homepage)
+  const [homeSaved, setHomeSaved] = useState(false)
   const [origin, setOrigin] = useState('')
   const [permission, setPermission] = useState<Exclude<Permission, 'notifications'>>('camera')
   const [mode, setMode] = useState<'allow' | 'block'>('block')
@@ -65,9 +75,16 @@ export function Settings({ browser, confirm, section, setSection }: {
         {select('engine', 'Search engine', { google: 'Google', duckduckgo: 'DuckDuckGo', bing: 'Bing' })}
       </Setting>
       <Setting label="Home page" detail="Leave blank to use the Drew new tab page.">
-        <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', 'homepage', homepage) }}>
-          <input aria-label="Home page URL" placeholder="https://example.com" value={homepage} onChange={event => setHomepage(event.target.value)} />
+        <form className="inline-form homepage-form" onSubmit={async event => {
+          event.preventDefault()
+          setHomeSaved(await command('setSetting', 'homepage', homepage))
+        }}>
+          <input aria-label="Home page URL" placeholder="https://example.com" value={homepage} onChange={event => { setHomepage(event.target.value); setHomeSaved(false) }} />
           <button className="secondary" type="submit">Save</button>
+          <button className="secondary" type="button" onClick={async () => {
+            if (await command('setSetting', 'homepage', homepage)) goHome()
+          }}>Open home page</button>
+          {homeSaved && <small role="status">Home page saved</small>}
         </form>
       </Setting>
       <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
@@ -93,15 +110,29 @@ export function Settings({ browser, confirm, section, setSection }: {
         {select('motion', 'Interface motion', { system: 'Follow system', off: 'Off' })}
       </Setting>
       <Setting label="Theme" detail="Applies to Home, the sidebar, Settings, and menus for this Profile.">
-        {select('theme', 'Theme', { dark: 'Soft Dark', black: 'True Black', slate: 'Slate', light: 'Light', system: 'Follow system' })}
+        {select('theme', 'Theme', profileThemes)}
       </Setting>
-      <Setting label="Profile accent" detail="Tint this Profile’s browser surfaces and controls, or use each Space’s accent.">
+      <Setting label="Profile accent" detail="Tint this Profile’s browser surfaces and controls, or use the theme’s default accent.">
         <AccentPicker color={resolvedAccent} change={value => { void command('setSetting', 'accentColor', value) }} />
-        {settings.accentColor && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentColor', '') }}>Use Space colors</button>}
+        {settings.accentColor && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentColor', '') }}>Use default accent</button>}
+      </Setting>
+      <Setting label="Accent gradient" detail="Choose a preset or set the end color to pair with your Profile accent.">
+        <div className="gradient-controls">
+          <div className="gradient-swatches" role="group" aria-label="Accent gradient presets">
+            {gradients.map(({ name, start, end }) => <button key={name} type="button" aria-label={name} title={name}
+              aria-pressed={settings.accentColor === start && settings.accentEnd === end}
+              style={{ backgroundImage: `linear-gradient(135deg, ${start}, ${end})` }}
+              onClick={() => { void command('setGradient', start, end) }} />)}
+          </div>
+          <label className="accent-input"><input type="color" aria-label="Gradient end color" value={settings.accentEnd || resolvedAccent}
+            onChange={event => { void command('setSetting', 'accentEnd', event.target.value) }} /> End color</label>
+          {settings.accentEnd && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentEnd', '') }}>Use solid accent</button>}
+        </div>
       </Setting>
       <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
       <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
     </div>}
+    {section === 'Import' && <BrowserImport profile={profile?.name ?? 'this Profile'} />}
     {section === 'New Tab' && <div className="setting-list">
       <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
         {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}

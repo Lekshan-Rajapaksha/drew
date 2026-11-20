@@ -3,11 +3,11 @@ import { createPortal } from 'react-dom'
 import { createRoot } from 'react-dom/client'
 import { AlertTriangle, Clock3, Globe2, LayoutPanelLeft, Pin, Puzzle, RotateCw, Star, X } from 'lucide-react'
 import {
-  accents, HOME, SIDEBAR_INSET, SIDEBAR_RADIUS, SIDEBAR_VERTICAL_GAP, WINDOW_CAPTION_HEIGHT, WINDOW_CONTROLS_INSET, WINDOW_CONTROLS_WIDTH, type Bookmark, type Favorite, type Tab, type Workspace,
+  accents, HOME, themeAccents, SIDEBAR_INSET, SIDEBAR_RADIUS, SIDEBAR_VERTICAL_GAP, WINDOW_CAPTION_HEIGHT, WINDOW_CONTROLS_INSET, WINDOW_CONTROLS_WIDTH, type Bookmark, type Favorite, type Tab, type Workspace,
 } from '../shared/model'
 import { webUrl } from '../shared/navigation'
 import { AccentPicker } from './AccentPicker'
-import { useSpaceGesture } from './useSpaceGesture'
+import { useSpaceGesture, type SwipePreview } from './useSpaceGesture'
 import { CommandBar } from './CommandBar'
 import { SplitView } from './SplitView'
 import { Assistant } from './assistant'
@@ -119,6 +119,8 @@ function Browser() {
   const error = useApp(state => state.error)
   const { setBrowser, setPage, setError } = useApp.getState()
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('General')
+  const [swipePreview, setSwipePreview] = useState<SwipePreview | null>(null)
+  const [entryDirection, setEntryDirection] = useState(0)
   const [resized, setResized] = useState<number | null>(null)
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [pendingPin, setPendingPin] = useState<boolean | null>(null)
@@ -168,20 +170,47 @@ function Browser() {
   const splitVisible = splitTabs.length >= 2 && !page
   const splitKey = splitTabs.map(tab => tab.id).join(',')
   const showView = external && !overlay
-  const floatsAboveWebsite = !welcome && (!isMac || !locked) && (external || splitVisible) &&
+  const floatsAboveWebsite = !welcome && !locked && (external || splitVisible) &&
     !modal && !palette && !context && !favoriteMenu
-  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 165 : 0) : 0
+  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 222 : 0) : 0
   const animate = browser?.settings.motion !== 'off' && !matchMedia('(prefers-reduced-motion: reduce)').matches
   const theme = browser?.settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : browser?.settings.theme ?? 'dark'
-  const accent = browser?.settings.accentColor || space?.accent || accents[0]
+  const accent = browser?.settings.accentColor || themeAccents[theme] || space?.accent || accents[0]
+  const accentEnd = browser?.settings.accentEnd || accent
   const intensity = { subtle: 0.45, balanced: 1, vivid: 1.8 }[browser?.settings.colorIntensity ?? 'balanced']
-  const chromeClass = `browser spatial-browser ${theme} ${topToolbar ? 'with-top-toolbar' : 'sidebar-first'} ${isMac ? 'mac' : 'windows'} ${browser?.settings.motion === 'off' ? 'motion-off' : ''}`
+  const chromeClass = `browser spatial-browser ${theme} ${topToolbar ? 'with-top-toolbar' : 'sidebar-first'} ${isMac ? 'mac' : 'windows'} ${browser?.settings.motion === 'off' ? 'motion-off' : ''}` + (browser?.settings.accentEnd ? ' has-gradient' : '')
   const chromeStyle = {
     '--caption-height': WINDOW_CAPTION_HEIGHT + 'px', '--sidebar-inset': SIDEBAR_INSET + 'px',
     '--sidebar-gap': SIDEBAR_VERTICAL_GAP + 'px', '--caption-inset': WINDOW_CONTROLS_INSET + 'px',
-    '--caption-width': WINDOW_CONTROLS_WIDTH + 'px', '--sidebar-radius': SIDEBAR_RADIUS + 'px', '--sidebar-width': width + 'px', '--accent': accent, '--color-intensity': intensity,
+    '--caption-width': WINDOW_CONTROLS_WIDTH + 'px', '--sidebar-radius': SIDEBAR_RADIUS + 'px', '--sidebar-width': width + 'px', '--accent': accent, '--accent-end': accentEnd, '--color-intensity': intensity,
   } as CSSProperties
+  useLayoutEffect(() => { setSwipePreview(null) }, [space?.id])
 
+  useLayoutEffect(() => {
+    const node = viewport.current
+    if ((!showView && !splitVisible) || overlay || !node) { window.lexn.layout(null); return }
+    const bounds = (element: Element) => {
+      const rect = element.getBoundingClientRect()
+      const x = Math.round(rect.left)
+      const y = Math.round(rect.top)
+      return { x, y, width: Math.round(rect.right) - x, height: Math.round(rect.bottom) - y }
+    }
+    const panes = [...node.querySelectorAll<HTMLElement>('[data-pane]')]
+    let lastLayout = ''
+    const layout = () => {
+      const next = panes.length ? panes.map(element => ({ ...bounds(element), id: element.dataset.pane! })) : bounds(node)
+      const signature = JSON.stringify(next)
+      if (signature === lastLayout) return
+      lastLayout = signature
+      window.lexn.layout(next)
+    }
+    layout()
+    const observer = new ResizeObserver(layout)
+    for (const element of [node, ...panes]) observer.observe(element)
+    window.addEventListener('resize', layout)
+    node.closest('.browser')?.addEventListener('transitionend', layout)
+    return () => { observer.disconnect(); window.removeEventListener('resize', layout); node.closest('.browser')?.removeEventListener('transitionend', layout) }
+  }, [showView, reserve, topToolbar, overlay, splitVisible, splitKey, locked])
   useLayoutEffect(() => {
     if (!sidebarSlot.current) return
     if (floatsAboveWebsite && !collapsed && !sidebarWindow.current) {
@@ -195,6 +224,7 @@ function Browser() {
       sidebarContent.style.setProperty('--sidebar-radius', SIDEBAR_RADIUS + 'px')
       sidebarContent.style.setProperty('--sidebar-width', width + 'px')
       sidebarContent.style.setProperty('--accent', accent)
+      sidebarContent.style.setProperty('--accent-end', accentEnd)
       sidebarContent.style.setProperty('--color-intensity', String(intensity))
     } else sidebarContent.removeAttribute('style')
     const container = popup?.document.body ?? sidebarSlot.current
@@ -202,7 +232,7 @@ function Browser() {
     const previous = sidebarPresentation.current
     window.lexn.layoutSidebar(popup ? width : 0, !collapsed, animate && (previous.floating || previous.collapsed))
     sidebarPresentation.current = { floating: Boolean(popup), collapsed }
-  }, [accent, animate, chromeClass, collapsed, floatsAboveWebsite, intensity, sidebarContent, width])
+  }, [accent, accentEnd, animate, chromeClass, collapsed, floatsAboveWebsite, intensity, sidebarContent, width])
 
   const ready = Boolean(browser)
   useLayoutEffect(() => {
@@ -217,8 +247,9 @@ function Browser() {
     if (!captionContent) return
     captionContent.className = chromeClass + ' window-caption-view'
     captionContent.style.setProperty('--accent', accent)
+    captionContent.style.setProperty('--accent-end', accentEnd)
     captionContent.style.setProperty('--color-intensity', String(intensity))
-  }, [accent, captionContent, chromeClass, intensity])
+  }, [accent, accentEnd, captionContent, chromeClass, intensity])
   useEffect(() => {
     if (pendingPin !== null && pendingPin === browser?.settings.keepSidebarOpen) setPendingPin(null)
   }, [browser?.settings.keepSidebarOpen, pendingPin])
@@ -304,31 +335,7 @@ function Browser() {
     }, 100)
     return () => { valid = false; clearTimeout(timer) }
   }, [editing, address, activeUrl, space?.id])
-  useLayoutEffect(() => {
-    const node = viewport.current
-    if ((!showView && !splitVisible) || overlay || !node) { window.lexn.layout(null); return }
-    const bounds = (element: Element) => {
-      const rect = element.getBoundingClientRect()
-      const x = Math.round(rect.left)
-      const y = Math.round(rect.top)
-      return { x, y, width: Math.round(rect.right) - x, height: Math.round(rect.bottom) - y }
-    }
-    const panes = [...node.querySelectorAll<HTMLElement>('[data-pane]')]
-    let lastLayout = ''
-    const layout = () => {
-      const next = panes.length ? panes.map(element => ({ ...bounds(element), id: element.dataset.pane! })) : bounds(node)
-      const signature = JSON.stringify(next)
-      if (signature === lastLayout) return
-      lastLayout = signature
-      window.lexn.layout(next)
-    }
-    layout()
-    const observer = new ResizeObserver(layout)
-    for (const element of [node, ...panes]) observer.observe(element)
-    window.addEventListener('resize', layout)
-    node.closest('.browser')?.addEventListener('transitionend', layout)
-    return () => { observer.disconnect(); window.removeEventListener('resize', layout); node.closest('.browser')?.removeEventListener('transitionend', layout) }
-  }, [showView, reserve, topToolbar, overlay, splitVisible, splitKey])
+
   useEffect(() => {
     if (!menu && !context && !modal && !palette && !favoriteMenu) return
     const dismiss = (event: KeyboardEvent) => {
@@ -389,9 +396,11 @@ function Browser() {
   }
   const switchProfile = (id: string, swipe?: number) => {
     if (id === space?.id && swipe === undefined) return
+    setEntryDirection(swipe ?? 0)
+    if (swipe === undefined) setSwipePreview(null)
     setPalette(null); setMenu(null); setEditing(false); setResults([]); setPage(null)
     setSplitIds([]); setContext(null); setFavoriteMenu(null)
-    void command('workspace', id)
+    void command('workspace', id).then(ok => { if (!ok) setSwipePreview(null) })
   }
   const newTab = () => { setMenu(null); setPalette('command') }
   const addSplit = (id: string) => {
@@ -402,16 +411,22 @@ function Browser() {
     if (!existing.includes(id) && existing.length < 4) setSplitIds([...existing, id])
     setPalette(null); setContext(null); setPage(null)
   }
-  const gesture = useSpaceGesture(spaces, space?.id ?? '', switchProfile, collapsed ? 0 : width)
+  const gesture = useSpaceGesture(spaces, space?.id ?? '', switchProfile, collapsed ? 0 : width, setSwipePreview)
   const confirm = (title: string, description: string, action: () => Promise<void>) =>
     setModal({ kind: 'confirm', title, description, action })
 
   if (!browser || !space) return <main className="startup"><Wordmark decorative />{error || 'Opening Drew…'}</main>
+  const goHome = () => {
+    setMenu(null); setPalette(null); setEditing(false); setSplitIds([]); setPage(null)
+    field.current?.blur()
+    void command('home')
+  }
+  const newWindow = () => { setMenu(null); setPalette(null); void command('newWindow') }
   const toggleToolbar = () => {
     setMenu(null); setPalette(null); setEditing(false)
     void command('setSetting', 'topToolbar', !topToolbar)
   }
-  const toolbar = (variant: 'top' | 'side' | 'palette') => <Toolbar variant={variant} toggleToolbar={toggleToolbar} active={active} input={editing ? address : activeUrl} setInput={value => {
+  const toolbar = (variant: 'top' | 'side' | 'palette') => <Toolbar variant={variant} toggleToolbar={toggleToolbar} goHome={goHome} newWindow={newWindow} active={active} input={editing ? address : activeUrl} setInput={value => {
         setAddress(value); setSelected(-1); setResults([])
       }} field={field} submit={navigate} saved={Boolean(saved)}
         bookmark={() => { if (active && webUrl(activeUrl)) setModal({ kind: 'bookmark', item: saved, source: active }) }}
@@ -433,7 +448,7 @@ function Browser() {
           }
         }} />
   const controls = !isMac && <WindowControls maximized={browser.windowMaximized} />
-  return <div className={chromeClass + (collapsed ? ' spatial-collapsed' : '') + (locked ? ' sidebar-pinned' : '')}
+  return <div className={chromeClass + (collapsed ? ' spatial-collapsed' : '') + (locked ? ' sidebar-pinned' : '') + (external || splitVisible ? ' native-page' : '')}
     style={chromeStyle}
     {...gesture}
     onPointerDown={event => {
@@ -446,6 +461,7 @@ function Browser() {
     {captionContent ? createPortal(controls, captionContent) : controls}
     <div className="sidebar-slot" ref={sidebarSlot} />
     {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} open={open}
+      preview={animate && !collapsed ? swipePreview : null} entryDirection={entryDirection}
       pinPending={pendingPin !== null} pinSidebar={() => {
         if (pendingPin !== null) return
         const next = !locked
@@ -497,7 +513,7 @@ function Browser() {
         {page === 'bookmarks' && <BookmarksPage key={space.id} browser={browser} open={navigate} edit={item => setModal({ kind: 'bookmark', item })} addFolder={() => setModal({ kind: 'folder' })} />}
         {page === 'history' && <HistoryPage key={space.id} open={navigate} confirm={action => confirm('Clear history', 'Delete all recorded visits from this profile.', action)} />}
         {page === 'downloads' && <DownloadsPage browser={browser} />}
-        {page === 'settings' && <Settings key={profileId} browser={browser} confirm={confirm} section={settingsSection} setSection={setSettingsSection} />}
+        {page === 'settings' && <Settings key={profileId} browser={browser} confirm={confirm} section={settingsSection} setSection={setSettingsSection} goHome={goHome} />}
         {!splitVisible && !page && !active?.error && (!active || active.url === HOME) && <Home key={profileId + ':' + (active?.id ?? '')}
           settings={browser.settings} navigate={navigate} openHistory={() => open('history')}
           customize={() => { open('settings'); setSettingsSection('New Tab') }} />}
@@ -531,6 +547,7 @@ function Browser() {
           label: extension.name, run: () => { setPalette(null); void command('runExtension', extension.id) },
         })),
         { label: 'Settings', run: () => open('settings') },
+        { label: 'New Window', run: newWindow },
         { label: 'New Blank Tab', run: () => { setPalette(null); setPage(null); setSplitIds([]); void command('newTab') } },
       ]} />}
     {favoriteMenu && <div className="context-menu" style={{ left: favoriteMenu.x, top: favoriteMenu.y }}>
@@ -548,7 +565,9 @@ function Browser() {
       <button type="button" onClick={() => { void command('closeTab', context.tab.id); setContext(null) }}><X size={15} /> Close tab</button>
     </div>}
     {modal && <Dialog modal={modal} close={() => setModal(null)} />}
-    {welcome && <Welcome animate={animate} />}
+    {welcome && <Welcome animate={animate} openImport={() => {
+      void command('finishWelcome').then(ok => { if (ok) { setSettingsSection('Import'); setPage('settings') } })
+    }} />}
     {error && <div className={'toast' + (external && !overlay ? ' toast-top' : '')} role="alert"><AlertTriangle size={17} /><span>{error}</span>
       <Tool label="Dismiss error" onClick={() => setError('')}><X size={15} /></Tool></div>}
   </div>

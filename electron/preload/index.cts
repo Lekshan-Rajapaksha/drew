@@ -3,12 +3,14 @@ import type { Bridge, BrowserState, SpaceScroll, Shortcut } from '../../shared/m
 
 const bridge: Bridge = {
   platform: process.platform,
-  version: '0.5.6',
+  version: '0.5.7',
   getState: () => ipcRenderer.invoke('lexn:state'),
   command: (name, ...args) => ipcRenderer.invoke('lexn:command', name, args),
   history: query => ipcRenderer.invoke('lexn:history', query),
   frequent: () => ipcRenderer.invoke('lexn:frequent'),
   cookies: () => ipcRenderer.invoke('lexn:cookies'),
+  importSources: () => ipcRenderer.invoke('lexn:import-sources'),
+  importBrowserData: (kind, source) => ipcRenderer.invoke('lexn:import-browser', kind, source),
   layout: rect => ipcRenderer.send('lexn:layout', rect),
   layoutSidebar: (width, open, animate) => ipcRenderer.send('lexn:sidebar-layout', width, open, animate),
   onState: listener => {

@@ -1,7 +1,7 @@
 {
   "name": "drew-browser",
   "productName": "Drew",
-  "version": "0.5.6",
+  "version": "0.5.8",
   "description": "A workspace-oriented desktop browser",
   "author": "Drew contributors",
   "private": true,

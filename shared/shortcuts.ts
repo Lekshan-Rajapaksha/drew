@@ -1,4 +1,5 @@
 export const shortcutDefinitions = {
+  newWindow: { label: 'New window', binding: 'N' },
   command: { label: 'Open Command Bar', binding: 'T' },
   address: { label: 'Focus address bar', binding: 'L' },
   closeTab: { label: 'Close current tab', binding: 'W' },

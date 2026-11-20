@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { Globe2, X } from 'lucide-react'
 import type { Tab } from '../shared/model'
 import { webUrl } from '../shared/navigation'
@@ -51,4 +51,3 @@ export function Overlay({ title, children, close }: { title: string; children: R
     </section>
   </div>
 }
-import { useId } from 'react'

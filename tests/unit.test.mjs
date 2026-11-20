@@ -1,11 +1,46 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { DatabaseSync } from 'node:sqlite'
 import { addressToUrl, originOf, webUrl } from '../out/shared/navigation.js'
 import { Database } from '../out/electron/main/database.js'
+import { exportedLinks, passwordRows, readChromium, saveImported } from '../out/electron/main/importData.js'
+
+test('browser imports preserve folders and timestamps, ignore duplicates, and stay in the destination Profile', async t => {
+  const dir = mkdtempSync(join(tmpdir(), 'drew-import-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const visit = 1783456789000
+  const history = new DatabaseSync(join(dir, 'History'))
+  history.exec('CREATE TABLE urls (url TEXT, title TEXT, last_visit_time INTEGER)')
+  history.prepare('INSERT INTO urls VALUES (?, ?, ?)').run('https://example.org/reading', 'Reading', (visit + 11644473600000) * 1000)
+  history.close()
+  writeFileSync(join(dir, 'Bookmarks'), JSON.stringify({ roots: { bookmark_bar: {
+    name: 'Bar', children: [{ type: 'folder', name: 'Reading', children: [
+      { type: 'url', name: 'Saved article', url: 'https://example.org/article' },
+      { type: 'url', name: 'Local file', url: 'file:///private/example' },
+    ] }],
+  } } }))
+  const imported = await readChromium(dir)
+  assert.deepEqual(imported.notes, [])
+  assert.deepEqual(imported.links, [{ url: 'https://example.org/article', title: 'Saved article', folder: 'Bar › Reading' }])
+  assert.deepEqual(imported.history, [{ url: 'https://example.org/reading', title: 'Reading', visitedAt: visit }])
+  const db = new Database(join(dir, 'drew.sqlite'))
+  const [first, second] = db.all('SELECT id FROM workspaces ORDER BY rowid')
+  assert.deepEqual(saveImported(db, first.id, imported.links, imported.history), { bookmarks: 1, visits: 1 })
+  assert.deepEqual(saveImported(db, first.id, imported.links, imported.history), { bookmarks: 0, visits: 0 })
+  assert.equal(db.history('', first.id).length, 1)
+  assert.equal(db.history('', second.id).length, 0)
+  assert.equal(db.all('SELECT id FROM bookmarks WHERE workspaceId = ?', second.id).length, 0)
+  db.close()
+  assert.deepEqual(exportedLinks('# Favorites\n- [Article](https://example.org/Article_(book))', true),
+    [{ url: 'https://example.org/Article_(book)', title: 'Article', folder: 'Favorites' }])
+  assert.deepEqual(exportedLinks('<DL><H3>News &amp; Reading</H3><DL><A HREF="https://example.org/?q=1&amp;a=2">Saved</A></DL></DL>'),
+    [{ url: 'https://example.org/?q=1&a=2', title: 'Saved', folder: 'News & Reading' }])
+  assert.deepEqual(passwordRows('name,url,username,password\r\nFixture,https://example.org/path,"a,b","c""d"\r\n'),
+    [{ origin: 'https://example.org', username: 'a,b', password: 'c"d' }])
+})
 
 test('address input navigates to web URLs or uses the selected search engine', () => {
   assert.equal(addressToUrl(' example.org/path ', 'google'), 'https://example.org/path')
@@ -26,7 +61,10 @@ test('migrations, literal history search, and saved browser state survive a fres
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const path = join(dir, 'data.sqlite')
   const db = new Database(path)
-  assert.deepEqual(db.all('SELECT name FROM workspaces ORDER BY rowid').map(row => row.name), ['Personal', 'Work', 'Study'])
+  const starters = db.all('SELECT id, name FROM workspaces ORDER BY rowid')
+  assert.deepEqual(starters.map(row => row.name), ['Personal', 'Work'])
+  assert.deepEqual(starters.map(row => db.settings(row.id).theme), ['black', 'light'])
+  assert.equal(db.get('welcomePending', false), true)
   const profile = db.primaryProfile()
   db.setProfileSetting(profile, 'theme', 'light')
   db.run("INSERT INTO bookmark_folders VALUES ('folder', 'Reading', ?)", profile)
@@ -89,6 +127,7 @@ test('v1 shared data migrates to the first profile without changing the active p
     assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites WHERE profileId = ?', 'work').count, 8)
     assert.equal(db.settings('personal').theme, 'light')
     assert.equal(db.settings('work').theme, 'dark')
+    assert.equal(db.get('welcomePending', false), false)
     assert.equal(db.history('Example', 'personal')[0].id, 'visit')
     assert.deepEqual(db.history('Example', 'work'), [])
     for (const table of ['bookmarks', 'bookmark_folders', 'downloads', 'profile_permissions']) {
@@ -109,6 +148,7 @@ test('the active Space’s Profile supplies a shared sidebar pin and width on up
   const work = legacy.one("SELECT id FROM workspaces WHERE name = 'Work'").id
   legacy.setProfileSetting(personal, 'keepSidebarOpen', false)
   legacy.setProfileSetting(personal, 'sidebarWidth', '292')
+  legacy.setProfileSetting(personal, 'theme', 'dark')
   legacy.setProfileSetting(work, 'keepSidebarOpen', true)
   legacy.setProfileSetting(work, 'sidebarWidth', '334')
   legacy.setProfileSetting(work, 'theme', 'slate')

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
 import { BrowserWindow, Menu, View, WebContentsView, type Rectangle, type Session } from 'electron'
 import { HOME, type PaneRect, type SavedTab, type Tab, type Workspace } from '../../shared/model.js'
 import { webUrl } from '../../shared/navigation.js'
@@ -16,6 +17,7 @@ export class Tabs {
   private closed: SavedTab[] = []
   private attached = new Set<WebContentsView>()
   private viewport = new View()
+  private activeBySpace = new Map<string, string>()
   private bounds: Rectangle | PaneRect[] | null = null
   private shuttingDown = false
   workspaceId: string
@@ -28,26 +30,35 @@ export class Tabs {
     private wire: (view: WebContentsView) => void,
     attachViewport: (view: View) => void,
     private wirePeek?: (url: string, space: string) => void,
+    private restoreSession = true,
+    initialSpace?: string,
   ) {
     this.viewport.setVisible(false)
     attachViewport(this.viewport)
-    const spaces = this.workspaces()
-    this.workspaceId = spaces.find(space => space.id === db.get('workspaceId', ''))?.id ?? spaces[0].id
-    for (const tab of db.all<SavedTab>('SELECT * FROM tabs ORDER BY position, rowid')) this.register(tab)
+    const spaces = db.all<Workspace>('SELECT * FROM workspaces ORDER BY rowid')
+    this.workspaceId = spaces.find(space => space.id === (initialSpace ?? db.get('workspaceId', '')))?.id ?? spaces[0].id
+    if (restoreSession) {
+      for (const tab of db.all<SavedTab>('SELECT * FROM tabs ORDER BY position, rowid')) this.register(tab)
+      for (const space of spaces) if (space.activeTab) this.activeBySpace.set(space.id, space.activeTab)
+    }
     const { startup, homepage } = db.settings(this.profileId)
-    if (startup === 'restore') this.switchWorkspace(this.workspaceId)
+    if (!restoreSession) this.create(homepage)
+    else if (startup === 'restore') this.switchWorkspace(this.workspaceId)
     else this.create(startup === 'home' ? homepage : HOME)
   }
 
-  workspaces() { return this.db.all<Workspace>('SELECT * FROM workspaces ORDER BY rowid') }
+  workspaces() {
+    return this.db.all<Workspace>('SELECT * FROM workspaces ORDER BY rowid').map(space =>
+      ({ ...space, activeTab: this.activeBySpace.get(space.id) ?? null }))
+  }
   storageFor(id: string) {
     return this.db.one<{ profileId: string | null }>('SELECT profileId FROM workspaces WHERE id = ?', id)?.profileId ?? id
   }
   get profileId() { return this.storageFor(this.workspaceId) }
   list() { return [...this.tabs.values()].map(tab => tab.state).sort((a, b) => a.position - b.position) }
   active() {
-    const workspace = this.db.one<Workspace>('SELECT * FROM workspaces WHERE id = ?', this.workspaceId)
-    return workspace?.activeTab ? this.tabs.get(workspace.activeTab) : undefined
+    const id = this.activeBySpace.get(this.workspaceId)
+    return id ? this.tabs.get(id) : undefined
   }
 
   private register(saved: SavedTab) {
@@ -59,6 +70,7 @@ export class Tabs {
   private makeView(tab: LiveTab) {
     const view = new WebContentsView({
       webPreferences: {
+        preload: join(import.meta.dirname, '../preload/gesture.cjs'),
         session: this.sessionFor(this.storageFor(tab.state.workspaceId)), sandbox: true, nodeIntegration: false, contextIsolation: true,
         webSecurity: true, javascript: this.db.settings(this.storageFor(tab.state.workspaceId)).javascript, navigateOnDragDrop: false,
       },
@@ -66,6 +78,17 @@ export class Tabs {
     tab.view = view
     const wc = view.webContents
     const state = tab.state
+    let lastHistorySwipe = -Infinity
+    wc.ipc.on('lexn:history-swipe', (event, direction: unknown) => {
+      if (this.shuttingDown || tab.view !== view || !this.attached.has(view) || !this.window.isFocused() ||
+          event.senderFrame !== wc.mainFrame || (direction !== 'back' && direction !== 'forward')) return
+      const now = performance.now()
+      if (now - lastHistorySwipe < 475) return
+      const history = wc.navigationHistory
+      if (direction === 'back' ? !history.canGoBack() : !history.canGoForward()) return
+      lastHistorySwipe = now
+      this.action(state.id, direction)
+    })
     const update = () => {
       if (this.shuttingDown || tab.view !== view || wc.isDestroyed()) return
       state.back = wc.navigationHistory.canGoBack()
@@ -184,14 +207,17 @@ export class Tabs {
   }
 
   private persist(tab: SavedTab) {
+    if (!this.restoreSession) return
     this.db.run(`INSERT INTO tabs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET url=excluded.url, title=excluded.title, favicon=excluded.favicon,
       pinned=excluded.pinned, groupId=excluded.groupId, position=excluded.position, lastUsed=excluded.lastUsed`,
     tab.id, tab.workspaceId, tab.url, tab.title, tab.favicon, tab.pinned, tab.groupId, tab.position, tab.lastUsed)
   }
 
-  private markActive(workspaceId: string, tabId: string) {
-    this.db.run('UPDATE workspaces SET activeTab = ? WHERE id = ?', tabId, workspaceId)
+  private markActive(workspaceId: string, tabId: string | null) {
+    if (tabId) this.activeBySpace.set(workspaceId, tabId)
+    else this.activeBySpace.delete(workspaceId)
+    if (this.restoreSession) this.db.run('UPDATE workspaces SET activeTab = ? WHERE id = ?', tabId, workspaceId)
   }
 
   create(url = HOME, workspaceId = this.workspaceId, select = true, previous?: SavedTab) {
@@ -226,7 +252,7 @@ export class Tabs {
       if (Array.isArray(this.bounds)) this.bounds = null
     }
     this.workspaceId = id
-    this.db.set('workspaceId', id)
+    if (this.restoreSession) this.db.set('workspaceId', id)
     const tabs = this.list().filter(tab => tab.workspaceId === id)
     const active = tabs.find(tab => tab.id === space.activeTab) ?? tabs[0]
     if (active) this.select(active.id)
@@ -237,21 +263,21 @@ export class Tabs {
     const tab = this.tabs.get(id)
     if (!tab) return
     const { workspaceId } = tab.state
-    const activeId = this.workspaces().find(space => space.id === workspaceId)?.activeTab
+    const activeId = this.activeBySpace.get(workspaceId)
     const siblings = this.ordered(workspaceId)
     const position = siblings.findIndex(item => item.id === id)
     this.closed.push({ ...tab.state })
     if (this.closed.length > 30) this.closed.shift()
     this.tabs.delete(id)
     this.destroyView(tab)
-    this.db.run('DELETE FROM tabs WHERE id = ?', id)
+    if (this.restoreSession) this.db.run('DELETE FROM tabs WHERE id = ?', id)
     if (activeId === id) {
       const next = siblings[position + 1] ?? siblings[position - 1]
       if (workspaceId === this.workspaceId) {
         if (next) this.select(next.id)
         else this.create()
       } else {
-        this.db.run('UPDATE workspaces SET activeTab = ? WHERE id = ?', next?.id ?? null, workspaceId)
+        this.markActive(workspaceId, next?.id ?? null)
       }
     }
     this.changed()
@@ -348,11 +374,19 @@ export class Tabs {
     this.changed()
   }
 
+  home() {
+    const url = this.db.settings(this.profileId).homepage
+    const active = this.active()
+    if (active) this.navigate(active.state.id, url)
+    else this.create(url)
+  }
+
   action(id: string, action: 'back' | 'forward' | 'reload' | 'stop' | 'home') {
     const tab = this.tabs.get(id)
-    const wc = tab?.view?.webContents
-    if (!tab || !wc) return
-    if (action === 'home') this.navigate(id, this.db.settings(this.storageFor(tab.state.workspaceId)).homepage)
+    if (!tab) return
+    if (action === 'home') { this.navigate(id, this.db.settings(this.storageFor(tab.state.workspaceId)).homepage); return }
+    const wc = tab.view?.webContents
+    if (!wc) return
     if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
     if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
     if (action === 'stop') { wc.stop(); tab.pendingUrl = null }

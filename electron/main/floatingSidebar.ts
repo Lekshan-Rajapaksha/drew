@@ -1,5 +1,5 @@
 import { WebContentsView, type BrowserWindow, type View, type WebContentsViewConstructorOptions } from 'electron'
-import { SIDEBAR_INSET, SIDEBAR_RADIUS } from '../../shared/model.js'
+import { SIDEBAR_INSET, SIDEBAR_RADIUS, SIDEBAR_VERTICAL_GAP } from '../../shared/model.js'
 
 export class FloatingSidebar {
   private view: WebContentsView | null = null
@@ -95,8 +95,8 @@ export class FloatingSidebar {
     if (!this.view || !this.width || this.window.isDestroyed()) return
     const [, height] = this.window.getContentSize()
     this.view.setBounds({
-      x: Math.round(this.x), y: 0,
-      width: this.width - 2 * SIDEBAR_INSET, height,
+      x: Math.round(this.x), y: SIDEBAR_VERTICAL_GAP,
+      width: this.width - 2 * SIDEBAR_INSET, height: height - 2 * SIDEBAR_VERTICAL_GAP,
     })
   }
 

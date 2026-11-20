@@ -1,21 +1,29 @@
 import { randomUUID } from 'node:crypto'
-import { app, clipboard, dialog, ipcMain, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { engines, HOME, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
+import { app, clipboard, dialog, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
 import type { FloatingSidebar } from './floatingSidebar.js'
 import type { Tabs } from './tabs.js'
 import { showExtension } from './extensions.js'
+import { detectSources, exportedLinks, passwordRows, readChromium, readImportFile, saveImported } from './importData.js'
 import type { Downloads } from './profile.js'
 
-export function browserState(db: Database, tabs: Tabs, downloads: Downloads): BrowserState {
+export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow): BrowserState {
   const profile = tabs.profileId
+  const workspaces = tabs.workspaces()
   return {
+    welcomePending: db.get('welcomePending', false),
+    windowMaximized: window.isMaximized(),
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
     workspaceId: tabs.workspaceId, profileId: profile, extensions: downloads.extensions(profile),
     favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid', profile),
-    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces: tabs.workspaces(), tabs: tabs.list().filter(tab => tab.workspaceId === tabs.workspaceId),
+    favoritePreviews: Object.fromEntries([...new Set(workspaces.map(space => space.profileId ?? space.id))].map(id => [id, {
+      items: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id),
+      size: db.settings(id).favoriteSize,
+    }])),
+    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces, tabs: tabs.list().filter(tab => tab.workspaceId === tabs.workspaceId),
     groups: db.all<TabGroup>('SELECT * FROM tab_groups WHERE workspaceId = ? ORDER BY rowid', tabs.workspaceId),
     bookmarks: db.all<Bookmark>('SELECT id, title, url, folderId FROM bookmarks WHERE workspaceId = ? ORDER BY rowid DESC', profile),
     folders: db.all<Folder>('SELECT id, name FROM bookmark_folders WHERE workspaceId = ? ORDER BY name', profile),
@@ -67,15 +75,25 @@ function boolean(value: unknown) {
 
 export function bindIpc(
   window: BrowserWindow, uiUrl: string, db: Database, tabs: Tabs,
-  downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll = false,
+  downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll: () => boolean, newWindow: () => void,
 ) {
-  const state = () => browserState(db, tabs, downloads)
+  const state = () => browserState(db, tabs, downloads, window)
   const currentTab = (value: unknown) => {
     const tabId = id(value)
     if (!tabs.list().some(tab => tab.id === tabId && tab.workspaceId === tabs.workspaceId)) throw new Error('Tab was not found in this Space.')
     return tabId
   }
   const commands: { [K in keyof Commands]: (...args: unknown[]) => void | Promise<void> } = {
+    newWindow,
+    home: () => tabs.home(),
+    setGradient: (first, end) => {
+      const profile = tabs.profileId
+      const startColor = hexColor(first), endColor = hexColor(end)
+      db.transaction(() => {
+        db.setProfileSetting(profile, 'accentColor', startColor)
+        db.setProfileSetting(profile, 'accentEnd', endColor)
+      })
+    },
     newTab: value => { tabs.create(value === undefined ? HOME : addressToUrl(text(value, 8192), db.settings(tabs.profileId).engine)) },
     closeTab: value => tabs.close(currentTab(value)),
     selectTab: value => tabs.select(id(value)),
@@ -218,8 +236,9 @@ export function bindIpc(
       switch (key) {
         case 'engine': db.setProfileSetting(profile, key, choice(value, Object.keys(engines))); break
         case 'startup': db.setProfileSetting(profile, key, choice(value, ['restore', 'home', 'blank'])); break
-        case 'theme': db.setProfileSetting(profile, key, choice(value, ['light', 'dark', 'black', 'slate', 'system'])); break
+        case 'theme': db.setProfileSetting(profile, key, choice(value, Object.keys(profileThemes))); break
         case 'background': db.setProfileSetting(profile, key, choice(value, ['violet', 'forest', 'midnight', 'black', 'match'])); break
+        case 'accentEnd':
         case 'accentColor': db.setProfileSetting(profile, key, value === '' ? '' : hexColor(value)); break
         case 'colorIntensity': db.setProfileSetting(profile, key, choice(value, ['subtle', 'balanced', 'vivid'])); break
         case 'sidebarWidth': {
@@ -228,7 +247,12 @@ export function bindIpc(
           db.set(key, String(width))
           break
         }
-        case 'homepage': db.setProfileSetting(profile, key, value === HOME || value === '' ? HOME : site(value)); break
+        case 'homepage': {
+          const input = text(value, 8192)
+          const normalized = !input || input === HOME ? HOME : site(/^[a-z][a-z\d+.-]*:\/\//i.test(input) ? input : 'https://' + input)
+          db.setProfileSetting(profile, key, normalized)
+          break
+        }
         case 'downloadPath':
           if (value !== '') throw new Error('Use the folder picker to set a download location.')
           db.setProfileSetting(profile, key, '')
@@ -303,20 +327,73 @@ export function bindIpc(
       else overrides[action] = next
       db.setProfileSetting(profile, 'keyboardShortcuts', JSON.stringify(overrides))
     },
+    finishWelcome: () => { db.set('welcomePending', false) },
+    windowAction: action => {
+      switch (choice(action, ['minimize', 'toggleMaximize', 'close'])) {
+        case 'minimize': window.minimize(); break
+        case 'toggleMaximize': if (window.isMaximized()) window.unmaximize(); else window.maximize(); break
+        case 'close': window.close(); break
+      }
+    },
   }
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) =>
     !window.isDestroyed() && event.sender === window.webContents && event.senderFrame === window.webContents.mainFrame &&
     event.senderFrame?.url === uiUrl
+  const ipc = window.webContents.ipc
   const invoke = (channel: string, handler: (...args: unknown[]) => unknown) => {
-    ipcMain.handle(channel, (event, ...args: unknown[]) => {
+    ipc.handle(channel, (event, ...args: unknown[]) => {
       if (!trusted(event)) throw new Error('Unauthorized sender.')
       return handler(...args)
     })
   }
   invoke('lexn:state', state)
-  invoke('lexn:uses-native-space-scroll', () => nativeSpaceScroll)
+  invoke('lexn:uses-native-space-scroll', nativeSpaceScroll)
   invoke('lexn:history', query => db.history(text(query), tabs.profileId))
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
+  invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label }) => ({ id, label })))
+  invoke('lexn:import-browser', async (value, selected) => {
+    const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords'])
+    const profile = tabs.profileId
+    let path: string
+    if (kind === 'browser') {
+      const sourceId = text(selected, 256)
+      const source = (await detectSources()).find(item => item.id === sourceId)
+      if (!source) throw new Error('That browser Profile is unavailable.')
+      path = source.path
+    } else {
+      const result = await dialog.showOpenDialog(window, {
+        properties: [kind === 'folder' ? 'openDirectory' : 'openFile'],
+        filters: kind === 'bookmarks' ? [{ name: 'Browser exports', extensions: ['html', 'htm', 'md'] }]
+          : kind === 'passwords' ? [{ name: 'Passwords CSV', extensions: ['csv'] }] : undefined,
+      })
+      if (result.canceled || !result.filePaths[0]) return null
+      path = result.filePaths[0]
+    }
+    if (kind === 'passwords') {
+      if (!await safeStorage.isAsyncEncryptionAvailable()) throw new Error('System encryption is unavailable.')
+      const rows = passwordRows(await readImportFile(path))
+      const logins: { origin: string; username: string; encrypted: string }[] = []
+      for (const { origin, username, password } of rows) {
+        if (window.isDestroyed()) return null
+        if (db.one('SELECT id FROM saved_logins WHERE profileId = ? AND origin = ? AND username = ?', profile, origin, username)) continue
+        logins.push({ origin, username, encrypted: (await safeStorage.encryptStringAsync(password)).toString('base64') })
+      }
+      if (window.isDestroyed()) return null
+      const passwords = db.transaction(() => logins.reduce((count, row) => count + Number(db.run(
+        'INSERT INTO saved_logins VALUES (?, ?, ?, ?, ?) ON CONFLICT(profileId, origin, username) DO NOTHING',
+        randomUUID(), profile, row.origin, row.username, row.encrypted,
+      ).changes), 0))
+      changed()
+      return { bookmarks: 0, visits: 0, passwords, notes: [] }
+    }
+    const imported = kind === 'bookmarks'
+      ? { links: exportedLinks(await readImportFile(path), /\.md$/i.test(path)), history: [], notes: [] }
+      : await readChromium(path)
+    if (window.isDestroyed()) return null
+    const saved = saveImported(db, profile, imported.links, imported.history)
+    changed()
+    return { ...saved, passwords: 0, notes: imported.notes }
+  })
   invoke('lexn:cookies', async () => (await downloads.sessionFor(tabs.profileId).cookies.get({})).map(({ name, domain, path, secure }) => ({
     name, domain: domain ?? '', path: path ?? '/', secure,
   })))
@@ -345,16 +422,11 @@ export function bindIpc(
       tabs.layout(panes)
     } else tabs.layout(rect(value))
   }
-  ipcMain.on('lexn:layout', layout)
+  ipc.on('lexn:layout', layout)
   const layoutSidebar = (event: IpcMainEvent, width: unknown, open: unknown, animate: unknown) => {
     if (!trusted(event) || typeof width !== 'number' || !Number.isInteger(width) ||
         (width !== 0 && (width < 242 || width > 360)) || typeof open !== 'boolean' || typeof animate !== 'boolean') return
     sidebar.layout(width, open, animate)
   }
-  ipcMain.on('lexn:sidebar-layout', layoutSidebar)
-  return () => {
-    for (const channel of ['state', 'history', 'frequent', 'cookies', 'command', 'uses-native-space-scroll']) ipcMain.removeHandler('lexn:' + channel)
-    ipcMain.removeListener('lexn:layout', layout)
-    ipcMain.removeListener('lexn:sidebar-layout', layoutSidebar)
-  }
+  ipc.on('lexn:sidebar-layout', layoutSidebar)
 }

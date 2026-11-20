@@ -1,6 +1,6 @@
 import {
   ArrowDownToLine, ArrowLeft, ArrowRight, Ellipsis, Heart, House, KeyRound,
-  PanelTopClose, PanelTopOpen, Puzzle, RotateCw, Search, Sparkles, Star, X,
+  PanelTopClose, PanelTopOpen, Puzzle, RotateCw, Search, Sparkles, SquarePlus, Star, X,
 } from 'lucide-react'
 import type { RefObject } from 'react'
 import type { Tab } from '../shared/model'
@@ -8,14 +8,15 @@ import { HOME } from '../shared/model'
 import { command, type Page } from './state'
 import { Favicon, Tool } from './ui'
 
-export function Toolbar({ variant, toggleToolbar, active, input, setInput, field, submit, bookmark, saved, favorite, favorited, toggleMenu, menu, open, focus, onBlur, suggestions, suggestionIndex, onKeyDown }: {
+export function Toolbar({ variant, toggleToolbar, active, input, setInput, field, submit, bookmark, saved, favorite, favorited, toggleMenu, menu, open, focus, onBlur, suggestions, suggestionIndex, onKeyDown, goHome, newWindow }: {
   variant: 'top' | 'side' | 'palette'; toggleToolbar: () => void; active?: Tab; input: string; setInput: (value: string) => void; field: RefObject<HTMLInputElement | null>
   submit: (value: string) => void; bookmark: () => void; saved: boolean; favorite: () => void; favorited: boolean
   toggleMenu: (menu: 'options' | 'extensions') => void; menu: string | null
   open: (page: Page | 'assistant') => void; focus: () => void; onBlur: () => void
+  goHome: () => void; newWindow: () => void
   suggestions: { title: string; url: string }[]; suggestionIndex: number; onKeyDown: React.KeyboardEventHandler<HTMLInputElement>
 }) {
-  const action = (name: 'back' | 'forward' | 'reload' | 'stop' | 'home') => {
+  const action = (name: 'back' | 'forward' | 'reload' | 'stop') => {
     if (active) void command('pageAction', active.id, name)
   }
   const atHome = !active || active.url === HOME
@@ -26,7 +27,7 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
       <Tool label={active?.loading ? 'Stop loading' : 'Reload'} onClick={() => action(active?.loading ? 'stop' : 'reload')}>
         {active?.loading ? <X size={17} /> : <RotateCw size={16} />}
       </Tool>
-      <Tool label="Home" onClick={() => action('home')}><House size={16} /></Tool>
+      <Tool label="Home" onClick={goHome}><House size={16} /></Tool>
     </div>}
     <div className="address-wrap">
       <form className="address" onSubmit={event => { event.preventDefault(); submit(suggestions[suggestionIndex]?.url ?? input) }}>
@@ -52,6 +53,7 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
       <Tool label="Browser menu" onClick={() => toggleMenu('options')}><Ellipsis size={20} /></Tool>
       {menu && <div className="browser-menu">
         {menu === 'options' && <>
+          <button onClick={newWindow}><SquarePlus size={16} /> New Window</button>
           <button onClick={toggleToolbar}>{variant === 'top' ? <PanelTopClose size={16} /> : <PanelTopOpen size={16} />} {variant === 'top' ? 'Hide top toolbar' : 'Show top toolbar'}</button>
           <button onClick={() => open('downloads')}><ArrowDownToLine size={16} /> Downloads</button>
           <button onClick={() => open('assistant')}><Sparkles size={16} /> Page assistant</button>

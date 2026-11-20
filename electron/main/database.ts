@@ -158,9 +158,12 @@ export class Database {
       }
       this.transaction(() => {
         if (!this.one('SELECT id FROM workspaces LIMIT 1')) {
-          for (const [index, name] of ['Personal', 'Work', 'Study'].entries()) {
-            this.addWorkspace(randomUUID(), name, accents[index], null, '')
+          for (const [index, [name, theme]] of [['Personal', 'black'], ['Work', 'light']].entries()) {
+            const id = randomUUID()
+            this.addWorkspace(id, name, accents[index], null, '')
+            this.setProfileSetting(id, 'theme', theme)
           }
+          this.set('welcomePending', true)
         }
         this.run("UPDATE downloads SET state = 'interrupted' WHERE state = 'progressing'")
       })
