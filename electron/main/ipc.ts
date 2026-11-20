@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { app, clipboard, dialog, ipcMain, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { accents, engines, HOME, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
+import { engines, HOME, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
 import type { Tabs } from './tabs.js'
@@ -11,13 +11,13 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads): Br
   const profile = tabs.profileId
   return {
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
-    workspaceId: tabs.workspaceId, extensions: downloads.extensions(profile),
-    favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites ORDER BY position, rowid'),
-    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces: tabs.workspaces(), tabs: tabs.list(),
-    groups: db.all<TabGroup>('SELECT * FROM tab_groups ORDER BY rowid'),
+    workspaceId: tabs.workspaceId, profileId: profile, extensions: downloads.extensions(profile),
+    favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid', profile),
+    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces: tabs.workspaces(), tabs: tabs.list().filter(tab => tab.workspaceId === tabs.workspaceId),
+    groups: db.all<TabGroup>('SELECT * FROM tab_groups WHERE workspaceId = ? ORDER BY rowid', tabs.workspaceId),
     bookmarks: db.all<Bookmark>('SELECT id, title, url, folderId FROM bookmarks WHERE workspaceId = ? ORDER BY rowid DESC', profile),
     folders: db.all<Folder>('SELECT id, name FROM bookmark_folders WHERE workspaceId = ? ORDER BY name', profile),
-    downloads: downloads.list(profile), settings: db.settings(),
+    downloads: downloads.list(profile), settings: db.settings(tabs.profileId),
     permissions: db.all<SitePermission>('SELECT origin, permission, allow FROM profile_permissions WHERE workspaceId = ? ORDER BY origin, permission', profile),
   }
 }
@@ -52,6 +52,12 @@ function site(value: unknown) {
   return url
 }
 
+function hexColor(value: unknown) {
+  const color = text(value, 7).toLowerCase()
+  if (!/^#[0-9a-f]{6}$/.test(color)) throw new Error('Enter a six-digit hex color.')
+  return color
+}
+
 function boolean(value: unknown) {
   if (typeof value !== 'boolean') throw new Error('Invalid boolean value.')
   return value
@@ -62,9 +68,14 @@ export function bindIpc(
   downloads: Downloads, changed: () => void,
 ) {
   const state = () => browserState(db, tabs, downloads)
+  const currentTab = (value: unknown) => {
+    const tabId = id(value)
+    if (!tabs.list().some(tab => tab.id === tabId && tab.workspaceId === tabs.workspaceId)) throw new Error('Tab was not found in this Space.')
+    return tabId
+  }
   const commands: { [K in keyof Commands]: (...args: unknown[]) => void | Promise<void> } = {
-    newTab: value => { tabs.create(value === undefined ? HOME : addressToUrl(text(value, 8192), db.settings().engine)) },
-    closeTab: value => tabs.close(id(value)),
+    newTab: value => { tabs.create(value === undefined ? HOME : addressToUrl(text(value, 8192), db.settings(tabs.profileId).engine)) },
+    closeTab: value => tabs.close(currentTab(value)),
     selectTab: value => tabs.select(id(value)),
     saveLogin: async (value, user, password) => {
       const profile = tabs.profileId
@@ -105,47 +116,54 @@ export function bindIpc(
     },
     mediaTab: value => tabs.toggleMedia(id(value)),
     muteTab: value => tabs.mute(id(value)),
-    pinTab: value => tabs.pin(id(value)),
-    moveTab: (value, target) => tabs.move(id(value), id(target)),
-    groupTab: (value, group) => tabs.group(id(value), group === null ? null : id(group)),
+    pinTab: value => tabs.pin(currentTab(value)),
+    moveTab: (value, target) => tabs.move(currentTab(value), currentTab(target)),
+    groupTab: (value, group) => tabs.group(currentTab(value), group === null ? null : id(group)),
     addGroup: (name, parent) => {
       const group = parent === undefined ? null : id(parent)
       if (group && !db.one('SELECT id FROM tab_groups WHERE id = ? AND workspaceId = ?', group, tabs.workspaceId)) throw new Error('Folder was not found.')
       db.run('INSERT INTO tab_groups VALUES (?, ?, ?, ?)', randomUUID(), tabs.workspaceId, required(name, 64), group)
     },
     favorite: value => {
-      const tab = tabs.list().find(tab => tab.id === id(value) && tab.workspaceId === tabs.workspaceId)
+      const tabId = currentTab(value)
+      const tab = tabs.list().find(item => item.id === tabId)
       if (!tab || !webUrl(tab.url)) return
-      db.run('INSERT OR IGNORE INTO favorites (id, url, title, favicon, position) VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites))', randomUUID(), tab.url, tab.title, tab.favicon)
+      const profile = tabs.profileId
+      db.run(`INSERT INTO favorites (profileId, id, url, title, favicon, position)
+        VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites WHERE profileId = ?))
+        ON CONFLICT(profileId, url) DO NOTHING`, profile, randomUUID(), tab.url, tab.title, tab.favicon, profile)
     },
     saveFavorite: (value, url, title, icon) => {
+      const profile = tabs.profileId
       const address = site(url)
       const name = required(title, 120)
       const glyph = text(icon, 12)
       if (value === null) {
-        db.run(`INSERT INTO favorites (id, url, title, icon, position)
-          VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites))
-          ON CONFLICT(url) DO UPDATE SET title = excluded.title, icon = excluded.icon`, randomUUID(), address, name, glyph)
+        db.run(`INSERT INTO favorites (profileId, id, url, title, icon, position)
+          VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites WHERE profileId = ?))
+          ON CONFLICT(profileId, url) DO UPDATE SET title = excluded.title, icon = excluded.icon`,
+          profile, randomUUID(), address, name, glyph, profile)
       } else {
-        db.run('UPDATE favorites SET favicon = CASE WHEN url = ? THEN favicon ELSE NULL END, url = ?, title = ?, icon = ? WHERE id = ?',
-          address, address, name, glyph, required(value, 64))
+        db.run('UPDATE favorites SET favicon = CASE WHEN url = ? THEN favicon ELSE NULL END, url = ?, title = ?, icon = ? WHERE profileId = ? AND id = ?',
+          address, address, name, glyph, profile, required(value, 64))
       }
     },
     moveFavorite: (value, target) => {
+      const profile = tabs.profileId
       const source = required(value, 64)
       const destination = target === null ? null : required(target, 64)
       if (source === destination) return
-      const sorted = db.all<{ id: string }>('SELECT id FROM favorites ORDER BY position, rowid').map(item => item.id)
+      const sorted = db.all<{ id: string }>('SELECT id FROM favorites WHERE profileId = ? ORDER BY position, rowid', profile).map(item => item.id)
       const from = sorted.indexOf(source)
       const to = destination === null ? sorted.length - 1 : sorted.indexOf(destination)
       if (from < 0 || to < 0) return
       sorted.splice(from, 1)
       sorted.splice(to, 0, source)
-      db.transaction(() => sorted.forEach((id, index) => db.run('UPDATE favorites SET position = ? WHERE id = ?', index, id)))
+      db.transaction(() => sorted.forEach((id, index) => db.run('UPDATE favorites SET position = ? WHERE profileId = ? AND id = ?', index, profile, id)))
     },
-    removeFavorite: value => { db.run('DELETE FROM favorites WHERE id = ?', required(value, 64)) },
+    removeFavorite: value => { db.run('DELETE FROM favorites WHERE profileId = ? AND id = ?', tabs.profileId, required(value, 64)) },
     openFavorite: value => {
-      const item = db.one<Favorite>('SELECT * FROM favorites WHERE id = ?', required(value, 64))
+      const item = db.one<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? AND id = ?', tabs.profileId, required(value, 64))
       if (!item) return
       const existing = tabs.list().find(tab => tab.workspaceId === tabs.workspaceId && tab.url === item.url)
       if (existing) tabs.select(existing.id)
@@ -158,23 +176,26 @@ export function bindIpc(
       tabs.create(item.url)
       db.run('DELETE FROM archived_tabs WHERE id = ?', item.id)
     },
-    removeGroup: group => tabs.removeGroup(id(group)),
-    navigate: (value, input) => tabs.navigate(id(value), addressToUrl(text(input, 8192), db.settings().engine)),
-    pageAction: (value, action) => tabs.action(id(value), choice(action, ['back', 'forward', 'reload', 'stop', 'home'])),
+    removeGroup: group => {
+      const key = id(group)
+      if (db.one('SELECT id FROM tab_groups WHERE id = ? AND workspaceId = ?', key, tabs.workspaceId)) tabs.removeGroup(key)
+    },
+    navigate: (value, input) => tabs.navigate(currentTab(value), addressToUrl(text(input, 8192), db.settings(tabs.profileId).engine)),
+    pageAction: (value, action) => tabs.action(currentTab(value), choice(action, ['back', 'forward', 'reload', 'stop', 'home'])),
     reopenTab: () => tabs.reopen(),
     nextTab: reverse => tabs.next(reverse === undefined ? false : boolean(reverse)),
     workspace: (value, direction) => tabs.switchWorkspace(id(value), direction === -1 ? -1 : direction === 1 ? 1 : 0),
     saveWorkspace: (value, name, accent, profile, icon) => {
       const label = required(name, 48)
-      const color = choice(accent, accents)
+      const color = hexColor(accent)
       const glyph = icon === undefined ? '' : text(icon, 12)
       if (value === null) {
         const storage = profile === undefined || profile === null ? null : id(profile)
         if (storage && !db.one('SELECT id FROM workspaces WHERE id = ? AND profileId IS NULL', storage)) throw new Error('Profile was not found.')
         const newId = randomUUID()
-        db.run('INSERT INTO workspaces (id, name, accent, activeTab, profileId, icon) VALUES (?, ?, ?, NULL, ?, ?)', newId, label, color, storage, glyph)
+        db.transaction(() => db.addWorkspace(newId, label, color, storage, glyph))
         tabs.switchWorkspace(newId)
-      } else db.run('UPDATE workspaces SET name = ?, accent = ?, icon = ? WHERE id = ?', label, color, glyph, id(value))
+      } else db.run('UPDATE workspaces SET name = ?, accent = ?, icon = ? WHERE id = ? AND id = ?', label, color, glyph, id(value), tabs.workspaceId)
     },
     saveBookmark: (value, title, url, folder) => {
       const profile = tabs.profileId
@@ -191,32 +212,42 @@ export function bindIpc(
     deleteVisit: value => { db.run('DELETE FROM history WHERE id = ? AND workspaceId = ?', id(value), tabs.profileId) },
     download: (value, action) => downloads.action(tabs.profileId, id(value), choice(action, ['open', 'reveal', 'cancel'])),
     setSetting: (key, value) => {
+      const profile = tabs.profileId
       switch (key) {
-        case 'engine': db.set(key, choice(value, Object.keys(engines))); break
-        case 'startup': db.set(key, choice(value, ['restore', 'home', 'blank'])); break
-        case 'theme': db.set(key, choice(value, ['light', 'dark', 'system'])); break
-        case 'background': db.set(key, choice(value, ['violet', 'forest', 'midnight'])); break
-        case 'homepage': db.set(key, value === HOME || value === '' ? HOME : site(value)); break
+        case 'engine': db.setProfileSetting(profile, key, choice(value, Object.keys(engines))); break
+        case 'startup': db.setProfileSetting(profile, key, choice(value, ['restore', 'home', 'blank'])); break
+        case 'theme': db.setProfileSetting(profile, key, choice(value, ['light', 'dark', 'black', 'slate', 'system'])); break
+        case 'background': db.setProfileSetting(profile, key, choice(value, ['violet', 'forest', 'midnight', 'black', 'match'])); break
+        case 'accentColor': db.setProfileSetting(profile, key, value === '' ? '' : hexColor(value)); break
+        case 'colorIntensity': db.setProfileSetting(profile, key, choice(value, ['subtle', 'balanced', 'vivid'])); break
+        case 'sidebarWidth': {
+          const width = Number(text(value, 3))
+          if (!Number.isInteger(width) || width < 242 || width > 360) throw new Error('Invalid sidebar width.')
+          db.setProfileSetting(profile, key, String(width))
+          break
+        }
+        case 'homepage': db.setProfileSetting(profile, key, value === HOME || value === '' ? HOME : site(value)); break
         case 'downloadPath':
           if (value !== '') throw new Error('Use the folder picker to set a download location.')
-          db.set(key, '')
+          db.setProfileSetting(profile, key, '')
           break
-        case 'archiveHours': db.set(key, choice(value, ['0', '12', '24', '72', '168'])); break
-        case 'favoriteSize': db.set(key, choice(value, ['small', 'medium', 'large'])); break
+        case 'archiveHours': db.setProfileSetting(profile, key, choice(value, ['0', '12', '24', '72', '168'])); break
+        case 'favoriteSize': db.setProfileSetting(profile, key, choice(value, ['small', 'medium', 'large'])); break
         case 'keepSidebarOpen':
-        case 'topToolbar': db.set(key, boolean(value)); break
+        case 'topToolbar': db.setProfileSetting(profile, key, boolean(value)); break
         case 'javascript':
-          if (boolean(value) !== db.settings().javascript) {
-            db.set(key, boolean(value))
-            tabs.resetRenderers()
+          if (boolean(value) !== db.settings(profile).javascript) {
+            db.setProfileSetting(profile, key, boolean(value))
+            tabs.resetRenderers(profile)
           }
           break
         default: throw new Error('Unknown setting.')
       }
     },
     chooseDownloadPath: async () => {
-      const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'], defaultPath: db.settings().downloadPath || app.getPath('downloads') })
-      if (!result.canceled && !window.isDestroyed()) db.set('downloadPath', result.filePaths[0])
+      const profile = tabs.profileId
+      const result = await dialog.showOpenDialog(window, { properties: ['openDirectory', 'createDirectory'], defaultPath: db.settings(profile).downloadPath || app.getPath('downloads') })
+      if (!result.canceled && !window.isDestroyed()) db.setProfileSetting(profile, 'downloadPath', result.filePaths[0])
     },
     clearData: async kind => {
       const id = tabs.profileId

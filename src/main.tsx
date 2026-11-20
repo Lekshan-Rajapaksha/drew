@@ -5,6 +5,8 @@ import {
   accents, HOME, type Bookmark, type Favorite, type Tab, type Workspace,
 } from '../shared/model'
 import { webUrl } from '../shared/navigation'
+import { AccentPicker } from './AccentPicker'
+import { useSpaceGesture } from './useSpaceGesture'
 import { CommandBar } from './CommandBar'
 import { SplitView } from './SplitView'
 import { Assistant } from './assistant'
@@ -85,8 +87,7 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
           {browser?.workspaces.filter(item => !item.profileId).map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
         </select></label>}
       </>}
-      {modal.kind === 'workspace' && <div className="swatches" aria-label="Accent color">{accents.map(color =>
-        <button key={color} type="button" aria-label={color} aria-pressed={color === accent} onClick={() => setAccent(color)} style={{ background: color }} />)}</div>}
+      {modal.kind === 'workspace' && <div><p className="muted">Space accent</p><AccentPicker color={accent} change={setAccent} /></div>}
       <div className="modal-actions">
         {modal.kind === 'bookmark' && modal.item && <button className="secondary destructive" type="button" onClick={() => {
           if (modal.item) void command('deleteBookmark', modal.item.id).then(ok => { if (ok) close() })
@@ -106,8 +107,8 @@ function Browser() {
   const page = useApp(state => state.page)
   const error = useApp(state => state.error)
   const { setBrowser, setPage, setError } = useApp.getState()
-  const [width, setWidth] = useState(() => Math.min(360, Math.max(242, Number(localStorage.getItem('sidebar-width')) || 284)))
-  const [manualSidebar, setManualSidebar] = useState(false)
+  const [resized, setResized] = useState<{ profileId: string; width: number } | null>(null)
+  const [sidebars, setSidebars] = useState<Record<string, boolean>>({})
   const [hoverSidebar, setHoverSidebar] = useState(false)
   const [pointerZone, setPointerZone] = useState<'edge' | 'sidebar' | 'outside'>('outside')
   const pointerX = useRef<number | null>(null)
@@ -129,6 +130,9 @@ function Browser() {
   const viewport = useRef<HTMLDivElement>(null)
   const spaces = browser?.workspaces ?? []
   const space = spaces.find(item => item.id === browser?.workspaceId)
+  const profileId = browser?.profileId ?? ''
+  const width = resized && resized.profileId === profileId ? resized.width : Number(browser?.settings.sidebarWidth) || 284
+  const manualSidebar = sidebars[profileId] ?? false
   const active = browser?.tabs.find(tab => tab.id === space?.activeTab)
   const activeUrl = active && active.url !== HOME ? active.url : ''
   const saved = browser?.bookmarks.find(bookmark => bookmark.url === activeUrl)
@@ -190,8 +194,9 @@ function Browser() {
       }
       else if (name === 'browse') { setMenu(null); setPalette(null); setEditing(false); setPage(null) }
       else if (name === 'sidebar') {
-        if (useApp.getState().browser?.settings.keepSidebarOpen) return
-        setManualSidebar(previous => !previous)
+        const snapshot = useApp.getState().browser
+        if (!snapshot || snapshot.settings.keepSidebarOpen) return
+        setSidebars(previous => ({ ...previous, [snapshot.profileId]: !previous[snapshot.profileId] }))
         setHoverSidebar(false)
       }
       else { setMenu(null); setPalette(null); setEditing(false); setPage(name) }
@@ -254,7 +259,7 @@ function Browser() {
 
   const toggle = () => {
     if (locked) return
-    setManualSidebar(collapsed)
+    setSidebars(previous => ({ ...previous, [profileId]: collapsed }))
     setHoverSidebar(false)
   }
   const resize = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -262,13 +267,20 @@ function Browser() {
     const start = event.clientX
     const grip = event.currentTarget
     grip.setPointerCapture(event.pointerId)
+    let nextWidth = width
     const move = (motion: PointerEvent) => {
-      const next = Math.round(Math.max(242, Math.min(360, width + motion.clientX - start)))
-      setWidth(next)
-      localStorage.setItem('sidebar-width', String(next))
+      nextWidth = Math.round(Math.max(242, Math.min(360, width + motion.clientX - start)))
+      setResized({ profileId, width: nextWidth })
     }
     grip.addEventListener('pointermove', move)
-    grip.addEventListener('lostpointercapture', () => grip.removeEventListener('pointermove', move), { once: true })
+    grip.addEventListener('lostpointercapture', () => {
+      grip.removeEventListener('pointermove', move)
+      if (useApp.getState().browser?.profileId === profileId) {
+        void command('setSetting', 'sidebarWidth', String(nextWidth)).then(ok => {
+          if (!ok) setResized(null)
+        })
+      } else setResized(null)
+    }, { once: true })
   }
   const open = (page: Page | 'assistant') => {
     setMenu(null)
@@ -292,6 +304,8 @@ function Browser() {
     const motion = swipe ?? (index > previous ? 1 : -1)
     const animate = !matchMedia('(prefers-reduced-motion: reduce)').matches
     setDirection(motion)
+    setResized(null)
+    setHoverSidebar(withinSidebar)
     setPalette(null); setMenu(null); setEditing(false); setResults([]); setPage(null)
     setSplitIds([]); setContext(null); setFavoriteMenu(null)
     void command('workspace', id, animate ? motion : 0)
@@ -305,11 +319,14 @@ function Browser() {
     if (!existing.includes(id) && existing.length < 4) setSplitIds([...existing, id])
     setPalette(null); setContext(null); setPage(null)
   }
+  const gesture = useSpaceGesture(spaces, space?.id ?? '', switchProfile)
   const confirm = (title: string, description: string, action: () => Promise<void>) =>
     setModal({ kind: 'confirm', title, description, action })
 
   if (!browser || !space) return <main className="startup"><Mark />{error || 'Opening LexN Browser…'}</main>
-  const light = browser.settings.theme === 'light' || (browser.settings.theme === 'system' && !systemDark)
+  const theme = browser.settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : browser.settings.theme
+  const accent = browser.settings.accentColor || space.accent
+  const intensity = { subtle: 0.45, balanced: 1, vivid: 1.8 }[browser.settings.colorIntensity] ?? 1
   const toggleToolbar = () => {
     setMenu(null); setPalette(null); setEditing(false)
     void command('setSetting', 'topToolbar', !topToolbar)
@@ -331,15 +348,16 @@ function Browser() {
             setSelected(index => (index + step + suggestions.length) % suggestions.length)
           }
         }} />
-  return <div className={`browser spatial-browser ${collapsed ? 'spatial-collapsed' : ''} ${light ? 'light' : ''} ${topToolbar ? 'with-top-toolbar' : 'sidebar-first'} ${window.lexn.platform === 'darwin' ? 'mac' : 'windows'}`}
-    style={{ '--sidebar-width': width + 'px', '--accent': space.accent } as CSSProperties}
+  return <div className={`browser spatial-browser ${collapsed ? 'spatial-collapsed' : ''} ${theme} ${topToolbar ? 'with-top-toolbar' : 'sidebar-first'} ${window.lexn.platform === 'darwin' ? 'mac' : 'windows'}`}
+    style={{ '--sidebar-width': width + 'px', '--accent': accent, '--color-intensity': intensity } as CSSProperties}
+    {...gesture}
     onPointerDown={event => {
       if (menu && event.target instanceof Element && !event.target.closest('.toolbar-actions')) setMenu(null)
       if (favoriteMenu && event.target instanceof Element && !event.target.closest('.context-menu')) setFavoriteMenu(null)
       if (context && event.target instanceof Element && !event.target.closest('.context-menu')) setContext(null)
     }}>
     <div className="rail-slot" inert={collapsed}><ServiceRail page={page} open={open} newTab={newTab}
-      address={() => { setMenu(null); setPalette('address') }} spaces={spaces} active={space.id} select={switchProfile} /></div>
+      address={() => { setMenu(null); setPalette('address') }} /></div>
     <Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} toggle={toggle}
       chrome={!topToolbar ? toolbar('side') : null} switchProfile={switchProfile} select={select} newTab={newTab}
       workspaceEditor={(space, sameProfile) => setModal({ kind: 'workspace', space, sameProfile })}
@@ -383,7 +401,7 @@ function Browser() {
         {page === 'bookmarks' && <BookmarksPage key={space.id} browser={browser} open={navigate} edit={item => setModal({ kind: 'bookmark', item })} addFolder={() => setModal({ kind: 'folder' })} />}
         {page === 'history' && <HistoryPage key={space.id} open={navigate} confirm={action => confirm('Clear history', 'Delete all recorded visits from this profile.', action)} />}
         {page === 'downloads' && <DownloadsPage browser={browser} />}
-        {page === 'settings' && <Settings key={space.id} browser={browser} confirm={confirm} />}
+        {page === 'settings' && <Settings key={profileId} browser={browser} confirm={confirm} />}
         {!splitVisible && !page && !active?.error && (!active || active.url === HOME) && <Home key={active?.id} activeId={active?.id}
           bookmarks={browser.bookmarks} background={browser.settings.background} navigate={navigate} library={open} />}
         {!splitVisible && !page && active?.error && <div className="page-error">

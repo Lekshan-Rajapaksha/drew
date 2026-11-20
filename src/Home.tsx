@@ -43,7 +43,7 @@ export function Home({ activeId, bookmarks, background, navigate, library }: {
         <span aria-hidden="true">·</span>{time}
       </time>
       <Tool label="Change new tab background" onClick={() => {
-        const choices = ['violet', 'forest', 'midnight'] as const
+        const choices = ['violet', 'forest', 'midnight', 'black', 'match'] as const
         void command('setSetting', 'background', choices[(choices.indexOf(background) + 1) % choices.length])
       }}><Palette size={17} /></Tool>
     </div>

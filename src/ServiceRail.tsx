@@ -1,8 +1,6 @@
 import { Archive, Bookmark, Clock3, Download, Plus, Search, Settings2 } from 'lucide-react'
-import type { Workspace } from '../shared/model'
 import type { Page } from './state'
 import { Mark, Tool } from './ui'
-import { useSpaceGesture } from './useSpaceGesture'
 
 const services = [
   ['bookmarks', 'Bookmarks', Bookmark],
@@ -12,12 +10,11 @@ const services = [
   ['settings', 'Settings', Settings2],
 ] as const
 
-export function ServiceRail({ page, open, newTab, address, spaces, active, select }: {
+export function ServiceRail({ page, open, newTab, address }: {
   page: Page | null; open: (page: Page) => void; newTab: () => void
-  address: () => void; spaces: Workspace[]; active: string; select: (id: string, direction?: number) => void
+  address: () => void
 }) {
-  const gesture = useSpaceGesture(spaces, active, select)
-  return <nav className="service-rail" aria-label="Browser services" {...gesture}>
+  return <nav className="service-rail" aria-label="Browser services">
     <div className="rail-mark"><Mark small /></div>
     <Tool label="Open Command Bar" onClick={newTab}><Plus size={20} /></Tool>
     <Tool label="Open address bar" onClick={address}><Search size={17} /></Tool>

@@ -2,6 +2,13 @@ import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { accents, defaultSettings, type Settings, type Visit } from '../../shared/model.js'
 
+const starterFavorites = [
+  ['google', 'https://www.google.com/', 'Google'], ['youtube', 'https://www.youtube.com/', 'YouTube'],
+  ['github', 'https://github.com/', 'GitHub'], ['wikipedia', 'https://www.wikipedia.org/', 'Wikipedia'],
+  ['mail', 'https://mail.google.com/', 'Mail'], ['calendar', 'https://calendar.google.com/', 'Calendar'],
+  ['drive', 'https://drive.google.com/', 'Drive'], ['music', 'https://open.spotify.com/', 'Music'],
+] as const
+
 const migrations = [
   `
   CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -86,6 +93,31 @@ const migrations = [
   UPDATE favorites SET position = rowid;
   `,
 
+  `
+  CREATE TABLE profile_settings (
+    profileId TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    key TEXT NOT NULL,
+    value TEXT NOT NULL,
+    PRIMARY KEY (profileId, key)
+  );
+  INSERT INTO profile_settings
+    SELECT (SELECT id FROM workspaces WHERE profileId IS NULL ORDER BY rowid LIMIT 1), key, value
+    FROM settings WHERE key IN (${Object.keys(defaultSettings).map(key => "'" + key + "'").join(', ')})
+      AND EXISTS (SELECT 1 FROM workspaces WHERE profileId IS NULL);
+  ALTER TABLE favorites RENAME TO global_favorites;
+  CREATE TABLE favorites (
+    profileId TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    id TEXT NOT NULL, url TEXT NOT NULL, title TEXT NOT NULL, favicon TEXT,
+    position INTEGER NOT NULL, icon TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (profileId, id),
+    UNIQUE (profileId, url)
+  );
+  INSERT INTO favorites
+    SELECT (SELECT id FROM workspaces WHERE profileId IS NULL ORDER BY rowid LIMIT 1), id, url, title, favicon, position, icon
+    FROM global_favorites WHERE EXISTS (SELECT 1 FROM workspaces WHERE profileId IS NULL);
+  DROP TABLE global_favorites;
+  `,
+
 ]
 
 type Value = string | number | null
@@ -100,12 +132,18 @@ export class Database {
       const version = this.one<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0
       if (version > migrations.length) throw new Error('This profile requires a newer version of LexN.')
       for (let index = version; index < migrations.length; index++) {
-        this.transaction(() => this.db.exec(migrations[index] + 'PRAGMA user_version = ' + (index + 1)))
+        this.transaction(() => {
+          this.db.exec(migrations[index] + 'PRAGMA user_version = ' + (index + 1))
+          if (index === 4) {
+            const profiles = this.all<{ id: string }>('SELECT id FROM workspaces WHERE profileId IS NULL ORDER BY rowid')
+            profiles.slice(1).forEach(profile => this.seedFavorites(profile.id))
+          }
+        })
       }
       this.transaction(() => {
         if (!this.one('SELECT id FROM workspaces LIMIT 1')) {
           for (const [index, name] of ['Personal', 'Work', 'Study'].entries()) {
-            this.run('INSERT INTO workspaces (id, name, accent, activeTab) VALUES (?, ?, ?, NULL)', randomUUID(), name, accents[index])
+            this.addWorkspace(randomUUID(), name, accents[index], null, '')
           }
         }
         this.run("UPDATE downloads SET state = 'interrupted' WHERE state = 'progressing'")
@@ -155,15 +193,36 @@ export class Database {
     this.run('INSERT INTO settings VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, JSON.stringify(value))
   }
 
-  settings(): Settings {
-    return {
-      engine: this.get('engine', defaultSettings.engine), homepage: this.get('homepage', defaultSettings.homepage),
-      theme: this.get('theme', defaultSettings.theme), startup: this.get('startup', defaultSettings.startup),
-      background: this.get('background', defaultSettings.background), javascript: this.get('javascript', true),
-      archiveHours: this.get('archiveHours', defaultSettings.archiveHours), downloadPath: this.get('downloadPath', ''), topToolbar: this.get('topToolbar', defaultSettings.topToolbar),
-      keepSidebarOpen: this.get('keepSidebarOpen', defaultSettings.keepSidebarOpen),
-      favoriteSize: this.get('favoriteSize', defaultSettings.favoriteSize),
-    }
+  settings(profile: string): Settings {
+    const entries = this.all<{ key: string; value: string }>('SELECT key, value FROM profile_settings WHERE profileId = ?', profile)
+    const overrides = entries.flatMap(({ key, value }) => {
+      if (!Object.hasOwn(defaultSettings, key)) return []
+      try {
+        const parsed: unknown = JSON.parse(value)
+        return typeof parsed === typeof defaultSettings[key as keyof Settings] ? [[key, parsed]] : []
+      } catch {
+        return []
+      }
+    })
+    return { ...defaultSettings, ...Object.fromEntries(overrides) }
+  }
+
+  setProfileSetting(profile: string, key: keyof Settings, value: boolean | string) {
+    this.run(`INSERT INTO profile_settings VALUES (?, ?, ?)
+      ON CONFLICT(profileId, key) DO UPDATE SET value = excluded.value`, profile, key, JSON.stringify(value))
+  }
+
+  addWorkspace(id: string, name: string, accent: string, profile: string | null, icon: string) {
+    this.run('INSERT INTO workspaces (id, name, accent, activeTab, profileId, icon) VALUES (?, ?, ?, NULL, ?, ?)',
+      id, name, accent, profile, icon)
+    if (!profile) this.seedFavorites(id)
+  }
+
+  private seedFavorites(profile: string) {
+    starterFavorites.forEach(([id, url, title], position) => {
+      this.run('INSERT INTO favorites (profileId, id, url, title, position) VALUES (?, ?, ?, ?, ?)',
+        profile, id, url, title, position)
+    })
   }
 
   primaryProfile() { return this.one<{ id: string }>('SELECT id FROM workspaces ORDER BY rowid LIMIT 1')!.id }

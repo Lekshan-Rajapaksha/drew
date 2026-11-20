@@ -10,8 +10,11 @@ export interface Settings {
   engine: keyof typeof engines
   homepage: string
   startup: 'restore' | 'home' | 'blank'
-  theme: 'dark' | 'light' | 'system'
-  background: 'violet' | 'forest' | 'midnight'
+  theme: 'dark' | 'black' | 'slate' | 'light' | 'system'
+  background: 'violet' | 'forest' | 'midnight' | 'black' | 'match'
+  accentColor: string
+  colorIntensity: 'subtle' | 'balanced' | 'vivid'
+  sidebarWidth: string
   downloadPath: string
   topToolbar: boolean
   keepSidebarOpen: boolean
@@ -21,7 +24,7 @@ export interface Settings {
 }
 export const defaultSettings: Settings = {
   engine: 'google', homepage: HOME, startup: 'restore', theme: 'dark',
-  background: 'violet', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
+  background: 'violet', accentColor: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
 export interface TabGroup { id: string; workspaceId: string; name: string; parentId: string | null }
@@ -53,7 +56,7 @@ export interface BrowserState {
   passwords: SavedLogin[];
   extensions: ProfileExtension[];
   favorites: Favorite[]; archived: ArchivedTab[];
-  workspaceId: string; workspaces: Workspace[]; tabs: Tab[]; groups: TabGroup[];
+  workspaceId: string; profileId: string; workspaces: Workspace[]; tabs: Tab[]; groups: TabGroup[];
   bookmarks: Bookmark[]; folders: Folder[]; downloads: Download[];
   settings: Settings; permissions: SitePermission[];
 }

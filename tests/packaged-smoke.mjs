@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -43,7 +43,7 @@ try {
   }
   const install = await app.evaluate(({ app }) => ({ packaged: app.isPackaged, version: app.getVersion(), path: app.getPath('userData') }))
   assert.equal(install.packaged, true)
-  assert.equal(install.version, '0.3.2')
+  assert.equal(install.version, JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')).version)
   assert.equal(install.path, profile)
   console.log('Packaged LexN opened on a clean profile.')
 

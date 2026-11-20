@@ -1,7 +1,7 @@
 {
   "name": "lexn-browser",
   "productName": "LexN Browser",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "A workspace-oriented desktop browser",
   "author": "LexN Browser contributors",
   "private": true,

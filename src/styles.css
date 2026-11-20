@@ -591,3 +591,71 @@ button.record-link:hover strong { text-decoration: underline; }
   .rail-slot, .spatial-collapsed .rail-slot { transition: none; }
   .spatial-scroll.swipe-left, .spatial-scroll.swipe-right, .viewport.swipe-left > .home, .viewport.swipe-right > .home { animation: none; }
 }
+
+/* Profile palettes */
+.spatial-browser.dark, .spatial-browser.slate, .spatial-browser.light {
+  --edge: color-mix(in srgb, var(--ambient) calc(12% * var(--color-intensity, 1)), var(--bg));
+  --chrome: color-mix(in srgb, var(--ambient) calc(7% * var(--color-intensity, 1)), var(--side));
+  --tile: color-mix(in srgb, var(--ambient) calc(11% * var(--color-intensity, 1)), var(--surface));
+}
+.spatial-browser.slate {
+  --bg: #12171c;
+  --side: #161d24;
+  --panel: #1c252e;
+  --surface: #25303b;
+  --text: #eef5fa;
+  --muted: #a4b5c1;
+  --faint: #879aa8;
+}
+.spatial-browser.black {
+  --bg: #000;
+  --side: #000;
+  --edge: #000;
+  --chrome: #000;
+  --panel: #090909;
+  --surface: #121212;
+  --tile: #141414;
+  --text: #f6f6f7;
+  --muted: #adadb6;
+  --faint: #85858e;
+  --line: #ffffff17;
+}
+.spatial-browser .service-rail {
+  background: linear-gradient(165deg, color-mix(in srgb, var(--ambient) calc(15% * var(--color-intensity, 1)), var(--chrome)), var(--chrome) 61%);
+}
+.spatial-browser .spatial-sidebar {
+  background: linear-gradient(150deg, color-mix(in srgb, var(--ambient) calc(8% * var(--color-intensity, 1)), var(--chrome)), var(--chrome) 56%);
+}
+.spatial-browser.black :is(.service-rail, .spatial-sidebar, .viewport) { background: #000; }
+.spatial-browser .home-violet {
+  background: radial-gradient(ellipse at 54% 43%, color-mix(in srgb, var(--ambient) calc(18% * var(--color-intensity, 1)), var(--surface)), var(--side) 70%);
+}
+.spatial-browser .home-match { background: var(--side); }
+.spatial-browser .home-black,
+.spatial-browser.black :is(.home-violet, .home-match) { background: #000; }
+.spatial-browser.light :is(.home-violet, .home-match) { color: var(--text); color-scheme: light; }
+.spatial-browser.light :is(.home-violet, .home-match) :is(.home-top, .home-identity, .home-search input, .quick-links button) { color: var(--text); }
+.spatial-browser.light :is(.home-violet, .home-match) .home-search { background: var(--panel); border-color: var(--line); }
+.spatial-browser.light :is(.home-violet, .home-match) .home-search input::placeholder { color: var(--muted); }
+.spatial-browser.light :is(.home-violet, .home-match) .quick-icon { background: #20143913; border-color: var(--line); color: #534777 !important; }
+.spatial-browser .primary { background: color-mix(in srgb, var(--accent) 65%, #eeeaff); }
+.accent-picker { display: grid; gap: 8px; justify-items: end; }
+.modal .accent-picker { justify-items: start; margin-top: 6px; }
+.accent-swatches { display: flex; flex-wrap: wrap; gap: 6px; }
+.accent-swatches button { width: 22px; height: 22px; border-radius: 50%; border: 1px solid var(--border); }
+.accent-swatches button[aria-pressed="true"] { outline: 1px solid var(--text); outline-offset: 2px; }
+.accent-picker .accent-input { width: fit-content; display: flex; align-items: center; gap: 7px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.accent-input input[type=color], .modal .accent-input input[type=color] { width: 34px; height: 26px; padding: 2px; }
+.spatial-scroll.swipe-left, .viewport.swipe-left > .home { animation: space-settle-right .36s cubic-bezier(.2,.75,.25,1) both; }
+.spatial-scroll.swipe-right, .viewport.swipe-right > .home { animation: space-settle-left .36s cubic-bezier(.2,.75,.25,1) both; }
+@keyframes space-settle-right {
+  0% { opacity: .55; transform: translateX(31px) scale(.987); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@keyframes space-settle-left {
+  0% { opacity: .55; transform: translateX(-31px) scale(.987); }
+  100% { opacity: 1; transform: translateX(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spatial-scroll.swipe-left, .spatial-scroll.swipe-right, .viewport.swipe-left > .home, .viewport.swipe-right > .home { animation: none; }
+}

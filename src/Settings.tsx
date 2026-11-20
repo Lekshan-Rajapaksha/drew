@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { Cookie, FolderOpen, Settings2, Shield, Trash2 } from 'lucide-react'
 import type { BrowserState, Permission, Settings as Preferences, SiteCookie } from '../shared/model'
 import { HOME } from '../shared/model'
+import { AccentPicker } from './AccentPicker'
 import { Empty, Filter, PageHeader } from './Library'
 import { command, useApp } from './state'
 import { Tool } from './ui'
@@ -14,6 +15,9 @@ function Setting({ label, detail, children }: { label: string; detail?: string; 
 
 export function Settings({ browser, confirm }: { browser: BrowserState; confirm: Confirm }) {
   const settings = browser.settings
+  const space = browser.workspaces.find(item => item.id === browser.workspaceId)
+  const profile = browser.workspaces.find(item => item.id === browser.profileId)
+  const resolvedAccent = settings.accentColor || space?.accent || '#b5a2ff'
   const [homepage, setHomepage] = useState(settings.homepage === HOME ? '' : settings.homepage)
   const [section, setSection] = useState('General')
   const [origin, setOrigin] = useState('')
@@ -42,7 +46,7 @@ export function Settings({ browser, confirm }: { browser: BrowserState; confirm:
     })}>{label}</button>
 
   return <div className="management settings">
-    <PageHeader icon={<Settings2 size={24} />} title="Settings" subtitle="Customize LexN and manage your browsing data." />
+    <PageHeader icon={<Settings2 size={24} />} title="Settings" subtitle={profile ? 'Preferences for ' + profile.name : 'Manage your Profile preferences.'} />
     <nav className="section-tabs" aria-label="Settings sections">{['General', 'Appearance', 'Privacy', 'Cookies', 'About'].map(item =>
       <button key={item} type="button" className={section === item ? 'selected' : ''} onClick={() => setSection(item)}>{item}</button>)}</nav>
     {section === 'General' && <div className="setting-list">
@@ -55,7 +59,7 @@ export function Settings({ browser, confirm }: { browser: BrowserState; confirm:
           <button className="secondary" type="submit">Save</button>
         </form>
       </Setting>
-      <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in all Spaces.">
+      <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
         {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
       </Setting>
       <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
@@ -73,12 +77,20 @@ export function Settings({ browser, confirm }: { browser: BrowserState; confirm:
         <input type="checkbox" aria-label="Keep tab sidebar expanded" checked={settings.keepSidebarOpen}
           onChange={event => { void command('setSetting', 'keepSidebarOpen', event.target.checked) }} />
       </Setting>
-      <Setting label="Theme">{select('theme', 'Theme', { dark: 'Dark', light: 'Light', system: 'Follow system' })}</Setting>
-      <Setting label="New tab background">{select('background', 'New tab background', { violet: 'Violet', forest: 'Forest', midnight: 'Midnight' })}</Setting>
+      <Setting label="Theme" detail="True Black uses a pure black browser frame and sidebar.">
+        {select('theme', 'Theme', { dark: 'Soft Dark', black: 'True Black', slate: 'Slate', light: 'Light', system: 'Follow system' })}
+      </Setting>
+      <Setting label="Profile accent" detail="Choose a color for this Profile or use each Space’s accent.">
+        <AccentPicker color={resolvedAccent} change={value => { void command('setSetting', 'accentColor', value) }} />
+        {settings.accentColor && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentColor', '') }}>Use Space colors</button>}
+      </Setting>
+      <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
+      <Setting label="New tab background">{select('background', 'New tab background', { violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight', black: 'Solid black', match: 'Match theme' })}</Setting>
+      <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size in Appearance', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
     </div>}
     {section === 'Privacy' && <>
       <div className="setting-list">
-        <Setting label="JavaScript" detail="Applies to all websites. Changing this reloads the active tab.">
+        <Setting label="JavaScript" detail="Applies to websites in this Profile. Changing it reloads the active tab.">
           <input aria-label="Enable website JavaScript" type="checkbox" checked={settings.javascript} onChange={event => { void command('setSetting', 'javascript', event.target.checked) }} />
         </Setting>
         <Setting label="Browsing history">{clear('history', 'Clear history', 'Delete all recorded visits from this profile.')}</Setting>

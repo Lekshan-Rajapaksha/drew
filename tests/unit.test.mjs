@@ -28,7 +28,7 @@ test('migrations, literal history search, and saved browser state survive a fres
   const db = new Database(path)
   assert.deepEqual(db.all('SELECT name FROM workspaces ORDER BY rowid').map(row => row.name), ['Personal', 'Work', 'Study'])
   const profile = db.primaryProfile()
-  db.set('theme', 'light')
+  db.setProfileSetting(profile, 'theme', 'light')
   db.run("INSERT INTO bookmark_folders VALUES ('folder', 'Reading', ?)", profile)
   db.run("INSERT INTO bookmarks VALUES ('bookmark', 'Example', 'https://example.org/', 'folder', ?)", profile)
   db.run("INSERT INTO history VALUES ('visit-1', 'https://example.org/', 'example_100%', 50, ?)", profile)
@@ -42,7 +42,7 @@ test('migrations, literal history search, and saved browser state survive a fres
 
   const reopened = new Database(path)
   try {
-    assert.equal(reopened.settings().theme, 'light')
+    assert.equal(reopened.settings(profile).theme, 'light')
     assert.equal(reopened.one('SELECT folderId FROM bookmarks').folderId, 'folder')
     assert.equal(reopened.history('_100%')[0].id, 'visit-1')
     assert.equal(reopened.frequent()[0].visits, 2)
@@ -61,7 +61,7 @@ test('v1 shared data migrates to the first profile without changing the active p
   const legacy = new DatabaseSync(path)
   legacy.exec(`
     CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-    INSERT INTO settings VALUES ('workspaceId', '"work"');
+    INSERT INTO settings VALUES ('workspaceId', '"work"'), ('theme', '"light"');
     CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT, accent TEXT, activeTab TEXT);
     INSERT INTO workspaces VALUES ('personal', 'Home', '#b5a2ff', NULL), ('work', 'Work', '#72e3ba', NULL);
     CREATE TABLE tabs (id TEXT PRIMARY KEY);
@@ -85,7 +85,10 @@ test('v1 shared data migrates to the first profile without changing the active p
     assert.equal(db.get('workspaceId', ''), 'work')
     assert.equal(db.primaryProfile(), 'personal')
     assert.ok(db.one('SELECT lastUsed FROM tabs').lastUsed > 0)
-    assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites').count, 8)
+    assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites WHERE profileId = ?', 'personal').count, 8)
+    assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites WHERE profileId = ?', 'work').count, 8)
+    assert.equal(db.settings('personal').theme, 'light')
+    assert.equal(db.settings('work').theme, 'dark')
     assert.equal(db.history('Example', 'personal')[0].id, 'visit')
     assert.deepEqual(db.history('Example', 'work'), [])
     for (const table of ['bookmarks', 'bookmark_folders', 'downloads', 'profile_permissions']) {

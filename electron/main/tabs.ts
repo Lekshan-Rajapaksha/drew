@@ -32,9 +32,9 @@ export class Tabs {
     const spaces = this.workspaces()
     this.workspaceId = spaces.find(space => space.id === db.get('workspaceId', ''))?.id ?? spaces[0].id
     for (const tab of db.all<SavedTab>('SELECT * FROM tabs ORDER BY position, rowid')) this.register(tab)
-    const startup = db.settings().startup
+    const { startup, homepage } = db.settings(this.profileId)
     if (startup === 'restore') this.switchWorkspace(this.workspaceId)
-    else this.create(startup === 'home' ? db.settings().homepage : HOME)
+    else this.create(startup === 'home' ? homepage : HOME)
   }
 
   workspaces() { return this.db.all<Workspace>('SELECT * FROM workspaces ORDER BY rowid') }
@@ -58,7 +58,7 @@ export class Tabs {
     const view = new WebContentsView({
       webPreferences: {
         session: this.sessionFor(this.storageFor(tab.state.workspaceId)), sandbox: true, nodeIntegration: false, contextIsolation: true,
-        webSecurity: true, javascript: this.db.settings().javascript, navigateOnDragDrop: false,
+        webSecurity: true, javascript: this.db.settings(this.storageFor(tab.state.workspaceId)).javascript, navigateOnDragDrop: false,
       },
     })
     tab.view = view
@@ -349,7 +349,7 @@ export class Tabs {
     const tab = this.tabs.get(id)
     const wc = tab?.view?.webContents
     if (!tab || !wc) return
-    if (action === 'home') this.navigate(id, this.db.settings().homepage)
+    if (action === 'home') this.navigate(id, this.db.settings(this.storageFor(tab.state.workspaceId)).homepage)
     if (action === 'back' && wc.navigationHistory.canGoBack()) wc.navigationHistory.goBack()
     if (action === 'forward' && wc.navigationHistory.canGoForward()) wc.navigationHistory.goForward()
     if (action === 'stop') { wc.stop(); tab.pendingUrl = null }
@@ -373,13 +373,20 @@ export class Tabs {
   }
 
   archive(expiredOnly = false) {
-    const hours = Number(this.db.settings().archiveHours)
-    if (expiredOnly && !hours) return
-    const cutoff = Date.now() - hours * 3_600_000
-    const visible = expiredOnly ? this.visibleIds() : []
-    const ids = this.list().filter(tab => !tab.pinned &&
-      (expiredOnly ? tab.lastUsed < cutoff && !visible.includes(tab.id) : tab.workspaceId === this.workspaceId))
     const now = Date.now()
+    const visible = expiredOnly ? this.visibleIds() : []
+    const cutoffByProfile = new Map<string, number>()
+    const ids = this.list().filter(tab => {
+      if (tab.pinned) return false
+      if (!expiredOnly) return tab.workspaceId === this.workspaceId
+      if (visible.includes(tab.id)) return false
+      const profileId = this.storageFor(tab.workspaceId)
+      if (!cutoffByProfile.has(profileId)) {
+        const hours = Number(this.db.settings(profileId).archiveHours)
+        cutoffByProfile.set(profileId, hours > 0 ? now - hours * 3_600_000 : 0)
+      }
+      return tab.lastUsed < cutoffByProfile.get(profileId)!
+    })
     for (const tab of ids) {
       if (tab.url !== HOME) this.db.run('INSERT INTO archived_tabs VALUES (?, ?, ?, ?, ?)', tab.id, tab.workspaceId, tab.url, tab.title, now)
       this.close(tab.id)
@@ -413,8 +420,8 @@ export class Tabs {
     const slide = this.spaceSlide
     let offset = 0
     if (slide && !Array.isArray(bounds)) {
-      const progress = Math.min(1, (performance.now() - slide.start) / 290)
-      offset = Math.round(42 * (1 - progress) ** 3) * slide.direction
+      const progress = Math.min(1, (performance.now() - slide.start) / 360)
+      offset = Math.round(33 * (1 - progress) ** 3) * slide.direction
       if (progress >= 1) this.spaceSlide = null
       else if (!this.slideTimer) this.slideTimer = setTimeout(() => {
         this.slideTimer = null

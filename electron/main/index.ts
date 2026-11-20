@@ -101,7 +101,7 @@ function createWindow() {
   const preview = (url: string, space: string = tabs.workspaceId) => {
     if (peek && !peek.isDestroyed()) peek.close()
     const opened = openPeek(browser, downloads!.sessionFor(tabs.storageFor(space)), url,
-      href => tabs.create(href, space, space === tabs.workspaceId), db.settings().javascript)
+      href => tabs.create(href, space, space === tabs.workspaceId), db.settings(tabs.storageFor(space)).javascript)
     peek = opened
     opened.on('closed', () => { if (peek === opened) peek = null })
   }

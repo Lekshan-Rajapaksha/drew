@@ -3,7 +3,6 @@ import { ChevronDown, Folder, PanelLeftClose, Pause, Play, Plus, Volume2, Volume
 import type { BrowserState, Favorite, Tab, TabGroup, Workspace } from '../shared/model'
 import { command, type Page } from './state'
 import { Favorites } from './Favorites'
-import { useSpaceGesture } from './useSpaceGesture'
 import { Favicon, Tool } from './ui'
 
 export function Sidebar({ browser, space, active, page, collapsed, locked, toggle, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, direction }: {
@@ -18,7 +17,6 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, toggl
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
   const [creating, setCreating] = useState(false)
-  const gesture = useSpaceGesture(browser.workspaces, space.id, switchProfile)
   const tabs = browser.tabs.filter(tab => tab.workspaceId === space.id)
   const groups = browser.groups.filter(group => group.workspaceId === space.id)
   const renderTab = (tab: Tab) => <div key={tab.id} className={'tab-row' + (tab.id === active?.id && !page ? ' selected' : '') + (dragging === tab.id ? ' dragging' : '')}
@@ -60,8 +58,7 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, toggl
     </div>}
   </div>
 
-  return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '')} inert={collapsed}
-    {...gesture}>
+  return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '')} inert={collapsed}>
     <div className="window-strip" />
     <header className="spatial-header">
       <Tool label={locked ? "Sidebar is locked open" : "Collapse sidebar"} disabled={locked} className="sidebar-toggle" onClick={toggle}><PanelLeftClose size={18} /></Tool>

@@ -27,13 +27,13 @@ Rebuild after editing. Dev and packaged launches both load the same compiled, lo
 
 - **Cmd/Ctrl+T** opens the Command Bar to navigate in a new tab, switch to open tabs, or run browser actions such as Clear Cache and Split View. **Cmd/Ctrl+L** opens the same bar for the current address. Use the arrows and Enter to choose a result.
 - Move the pointer to the left edge to reveal the sidebar and service rail. They slide away when the pointer leaves. **Cmd/Ctrl+S** holds the sidebar open or returns it to auto-hide. Set **Appearance → Keep tab sidebar expanded** to lock it open across launches. With the macOS top toolbar and sidebar hidden, the page fills the window without a border. The optional navigation toolbar stays hidden by default and can be toggled in Appearance or with **Cmd/Ctrl+Shift+Y**.
-- Swipe horizontally with two fingers over the sidebar or click the bottom dots to switch Spaces. The page and tab list slide in the direction of travel. **+ → New Space** lets you choose an existing Profile. **+ → New profile** creates an isolated Profile and its first Space. Click the Space name to edit its icon, color, or name.
-- Favorites are URL shortcuts shared across Spaces. Click + to add a URL, label, or optional emoji icon. Drop an open tab or a link into the grid to add it. Drag tiles to reorder them, use the size selector to change their size, or right-click a tile to edit or remove it. Pin a tab to keep it in its Space or move it into a nested folder. Today tabs auto-archive after 24 hours of inactivity by default. **Clear** archives them immediately, and **Archived tabs** lets you restore them. Set the timeout or turn it off in General.
+- Swipe horizontally with two fingers over the sidebar or click the bottom dots to switch Spaces. The page and tab list slide in the direction of travel. Momentum stays within one gesture until the scroll stream goes quiet, so one swipe advances one Space. **+ → New Space** lets you choose an existing Profile. **+ → New profile** creates an isolated Profile and its first Space. Click the Space name to edit its icon, color, or name.
+- Favorites are stored per Profile and available in Spaces linked to that Profile. Click + to add a URL, label, or optional emoji icon. Drop an open tab or a link into the grid to add it. Drag tiles to reorder them, use the size selector to change their size, or right-click a tile to edit or remove it. Pin a tab to keep it in its Space or move it into a nested folder. Today tabs auto-archive after 24 hours of inactivity by default. **Clear** archives them immediately, and **Archived tabs** lets you restore them. Set the timeout or turn it off in General.
 - Drag a tab onto the viewport, choose **Add to Split View**, or press **Cmd/Ctrl+Shift+D** to add a pane. Split View supports up to four pages with separate addresses and draggable dividers.
 - Links away from a pinned site can open a preview window. Use **Esc** to close it or **Cmd/Ctrl+Enter** to promote it to a tab. Web links the operating system hands off to LexN open in the same preview. On macOS, choose LexN in System Settings to route default-browser links to it.
 - Media tabs show play/pause and mute controls in the sidebar when the page exposes suitable media. Native site-driven picture-in-picture can still be used where supported.
 
-Profiles own site storage, history, bookmarks, downloads, permissions, saved passwords, and installed extensions. The Passwords page saves manually entered credentials using system encryption on macOS and Windows. The Extensions page loads unpacked extensions into the current Profile. Compatible extension popups can be found by name in the Command Bar. Electron provides a subset of Chrome extension APIs. See the [Electron extension support documentation](https://www.electronjs.org/docs/latest/api/extensions).
+Profiles own site storage, history, bookmarks, downloads, permissions, saved passwords, installed extensions, Favorites, and browser preferences. Appearance offers True Black, Soft Dark, Slate, Light, and system modes, plus an arbitrary hex accent, three intensity levels, and separate new tab backgrounds. The 0.4.0 upgrade keeps previously global Favorites and preferences in the original Personal Profile. Other Profiles start with their own defaults. The Passwords page saves manually entered credentials using system encryption on macOS and Windows. The Extensions page loads unpacked extensions into the current Profile. Compatible extension popups can be found by name in the Command Bar. Electron provides a subset of Chrome extension APIs. See the [Electron extension support documentation](https://www.electronjs.org/docs/latest/api/extensions).
 
 ## Architecture
 
@@ -112,6 +112,10 @@ On each release platform, manually verify media capture and notifications with O
 ### Packaged relaunch checks
 
 Run `node tests/packaged-smoke.mjs "/absolute/path/to/the/packaged/executable"` after building. The test uses a temporary browser profile and exercises opening, window activation, duplicate launch, and reopening after exit.
+
+### Local verification for 0.4.0
+
+The Apple Silicon desktop suite checks the True Black palette, saved custom accents, Profile-specific settings, Favorites and cookies, and a long wheel-momentum burst crossing both sidebar surfaces. Spaces bound to the same Profile share its data by design.
 
 ### Local verification for 0.3.0
 

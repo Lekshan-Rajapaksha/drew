@@ -88,7 +88,7 @@ export class Downloads {
     session.on('will-download', (event, item) => {
       if (this.stopped) { event.preventDefault(); return }
       const id = randomUUID()
-      const preferred = db.settings().downloadPath
+      const preferred = db.settings(profile).downloadPath
       let directory = app.getPath('downloads')
       if (preferred) {
         try { if (statSync(preferred).isDirectory()) directory = preferred } catch { /* Use Downloads. */ }

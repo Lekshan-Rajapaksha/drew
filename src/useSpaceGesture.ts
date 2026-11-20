@@ -1,9 +1,12 @@
 import { useRef } from 'react'
 import type { Workspace } from '../shared/model'
 
+const wheelQuietTime = 270
+
 export function useSpaceGesture(spaces: Workspace[], active: string, select: (id: string, direction?: number) => void) {
-  const wheel = useRef({ distance: 0, last: 0, switched: 0 })
+  const wheel = useRef({ distance: 0, last: -Infinity, consumed: false })
   const touch = useRef<{ x: number; y: number } | null>(null)
+  const overSidebar = (target: EventTarget) => target instanceof Element && Boolean(target.closest('.spatial-sidebar, .service-rail'))
   const advance = (direction: number) => {
     const index = spaces.findIndex(space => space.id === active)
     if (index < 0 || spaces.length < 2) return
@@ -11,23 +14,27 @@ export function useSpaceGesture(spaces: Workspace[], active: string, select: (id
   }
   return {
     onWheel: (event: React.WheelEvent) => {
-      const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX
-      if (event.ctrlKey || Math.abs(dx) <= Math.abs(event.shiftKey ? 0 : event.deltaY)) return
       const now = performance.now()
       const gesture = wheel.current
-      const elapsed = now - gesture.last
+      if (now - gesture.last >= wheelQuietTime) {
+        gesture.distance = 0
+        gesture.consumed = false
+      }
+      // Momentum can continue past a fixed cooldown and cross between chrome surfaces.
+      // Every event in the burst extends the latch until the trackpad is quiet.
       gesture.last = now
-      if (gesture.switched && now - gesture.switched < 520) return
-      if (elapsed > 140 || Math.sign(gesture.distance) !== Math.sign(dx)) gesture.distance = 0
+      if (gesture.consumed || event.ctrlKey || !overSidebar(event.target)) return
+      const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX
+      if (Math.abs(dx) <= Math.abs(event.shiftKey ? 0 : event.deltaY)) return
+      if (Math.sign(gesture.distance) !== Math.sign(dx)) gesture.distance = 0
       gesture.distance += dx * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 200 : 1)
       if (Math.abs(gesture.distance) < 64) return
+      gesture.consumed = true
       advance(Math.sign(gesture.distance))
-      gesture.distance = 0
-      gesture.switched = now
     },
     onTouchStart: (event: React.TouchEvent) => {
       const point = event.touches[0]
-      touch.current = point ? { x: point.clientX, y: point.clientY } : null
+      touch.current = point && overSidebar(event.target) ? { x: point.clientX, y: point.clientY } : null
     },
     onTouchEnd: (event: React.TouchEvent) => {
       const point = event.changedTouches[0]
