@@ -25,6 +25,24 @@ const gradients = [
   { name: 'Glacier', start: '#a2dcff', end: '#6b9af1' },
   { name: 'Canopy', start: '#96dca4', end: '#48a5a3' },
 ]
+const layouts = [
+  { id: 'sidebar', name: 'Floating sidebar', detail: 'Address, Favorites, and tabs on the left.' },
+  { id: 'top', name: 'Top toolbar', detail: 'Address and a horizontal tab strip across the top.' },
+  { id: 'compact', name: 'Compact rail', detail: 'A narrow strip of site and service icons.' },
+] as const
+
+function LayoutPreview({ layout, tabs }: { layout: typeof layouts[number]['id']; tabs: Preferences['topTabs'] }) {
+  const tabStrip = <div className="layout-preview-tabs"><i /><i /><i /></div>
+  return <div className={'layout-preview layout-preview-' + layout} aria-hidden="true">
+    {layout !== 'top' && <div className="layout-preview-rail"><b /><div><i /><i /><i /></div><i /><i /><i /></div>}
+    <div className="layout-preview-main">
+      {layout === 'top' && <div className="layout-preview-top">
+        {tabs === 'above' && tabStrip}<div className="layout-preview-address"><i /><i /><b /></div>{tabs === 'below' && tabStrip}
+      </div>}
+      <div className="layout-preview-page"><b /><i /><i /></div>
+    </div>
+  </div>
+}
 
 export function Settings({ browser, confirm, section, setSection, goHome }: {
   browser: BrowserState; confirm: Confirm; section: SettingsSection; setSection: (section: SettingsSection) => void; goHome: () => void
@@ -97,9 +115,27 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
       </Setting>
     </div>}
     {section === 'Appearance' && <div className="setting-list">
+      <div className="navigation-layout">
+        <strong>Navigation layout</strong>
+        <div className="layout-options" role="group" aria-label="Navigation layout">
+          {layouts.map(({ id, name, detail }) => <button key={id} type="button"
+            aria-pressed={id === (settings.sidebarStyle === 'compact' ? 'compact' : settings.topToolbar ? 'top' : 'sidebar')}
+            onClick={() => { void command('setNavigationLayout', id) }}>
+            <LayoutPreview layout={id} tabs={settings.topTabs} /><strong>{name}</strong><span>{detail}</span>
+          </button>)}
+        </div>
+      </div>
       <Setting label="Top toolbar" detail="Show navigation and the address bar above the webpage.">
         {toggle('topToolbar', 'Show top toolbar')}
       </Setting>
+      {settings.topToolbar && <>
+        <Setting label="Top tab strip" detail="Choose where to show the current Space’s tabs.">
+          {select('topTabs', 'Top tab strip', { above: 'Above the address bar', below: 'Below the address bar', hidden: 'Hidden' })}
+        </Setting>
+        <Setting label="Top toolbar buttons">
+          {select('topActions', 'Top toolbar buttons', { full: 'Full controls', minimal: 'Compact controls' })}
+        </Setting>
+      </>}
       <Setting label="Keep tab sidebar expanded" detail="The pin and sidebar width are shared across all Profiles.">
         {toggle('keepSidebarOpen', 'Keep tab sidebar expanded')}
       </Setting>

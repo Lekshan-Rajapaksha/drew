@@ -76,13 +76,27 @@ function createWindow(initialSpace?: string) {
     })
   }
   let dirty = false
+  const peerTabs = () => [...windows.values()].filter(entry => entry.browser !== browser)
+    .flatMap(entry => entry.tabs.list().filter(tab => entry.tabs.storageFor(tab.workspaceId) === tabs.profileId))
+  const focusWindowTab = (id: string) => {
+    const target = peerTabs().find(tab => tab.id === id)
+    if (!target) return
+    const owner = [...windows.values()].find(entry => entry.browser !== browser && entry.tabs.list().some(tab => tab.id === id))
+    if (!owner) return
+    if (owner.tabs.workspaceId !== target.workspaceId) owner.tabs.switchWorkspace(target.workspaceId)
+    owner.tabs.select(id)
+    if (owner.browser.isMinimized()) owner.browser.restore()
+    owner.browser.show()
+    owner.browser.focus()
+    owner.browser.webContents.send('lexn:shortcut', 'browse')
+  }
   const changed = () => {
     if (dirty) return
     dirty = true
     setImmediate(() => {
       dirty = false
       if (!browser.isDestroyed() && downloads) {
-        browser.webContents.send('lexn:state', browserState(db, tabs, downloads, browser))
+        browser.webContents.send('lexn:state', browserState(db, tabs, downloads, browser, peerTabs()))
       }
     })
   }
@@ -134,10 +148,11 @@ function createWindow(initialSpace?: string) {
     opened.on('closed', () => { if (peek === opened) peek = null })
   }
   const sidebar = new FloatingSidebar(browser, wireKeys)
-  const tabs: Tabs = new Tabs(browser, db, id => downloads!.sessionFor(id), changed,
+  const tabs: Tabs = new Tabs(browser, db, id => downloads!.sessionFor(id), notifyWindows,
     view => { wireKeys(view.webContents) }, view => sidebar.addWebsite(view), preview, restoreSession, initialSpace)
   const windowId = browser.id
   windows.set(windowId, { browser, preview, changed, tabs })
+  notifyWindows()
   currentWindowId = windowId
   let nativeSpaceScroll = false
   const trackFocusedWindow = () => {
@@ -168,7 +183,7 @@ function createWindow(initialSpace?: string) {
   }, 33)
   const archiveTimer = setInterval(() => tabs.archive(true), 60_000)
   bindIpc(browser, uiUrl, db, tabs, downloads, notifyWindows, sidebar, () => nativeSpaceScroll,
-    () => { createWindow(tabs.workspaceId) })
+    () => { createWindow(tabs.workspaceId) }, peerTabs, focusWindowTab)
   wireKeys(browser.webContents)
   browser.webContents.setWindowOpenHandler(details => {
     if (details.url !== 'about:blank' || browser.webContents.getURL() !== uiUrl) return { action: 'deny' }
@@ -218,6 +233,7 @@ function createWindow(initialSpace?: string) {
   })
   browser.on('closed', () => {
     windows.delete(windowId)
+    notifyWindows()
     if (currentWindowId === windowId) currentWindowId = undefined
   })
   void browser.loadURL(uiUrl).then(() => {

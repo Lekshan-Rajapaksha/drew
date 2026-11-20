@@ -1,6 +1,6 @@
 import {
   ArrowDownToLine, ArrowLeft, ArrowRight, Ellipsis, Heart, House, KeyRound,
-  PanelTopClose, PanelTopOpen, Puzzle, RotateCw, Search, Sparkles, SquarePlus, Star, X,
+  PanelTopClose, PanelTopOpen, Plus, Puzzle, RotateCw, Search, Sparkles, SquarePlus, Star, X,
 } from 'lucide-react'
 import type { RefObject } from 'react'
 import type { Tab } from '../shared/model'
@@ -8,12 +8,13 @@ import { HOME } from '../shared/model'
 import { command, type Page } from './state'
 import { Favicon, Tool } from './ui'
 
-export function Toolbar({ variant, toggleToolbar, active, input, setInput, field, submit, bookmark, saved, favorite, favorited, toggleMenu, menu, open, focus, onBlur, suggestions, suggestionIndex, onKeyDown, goHome, newWindow }: {
+export function Toolbar({ variant, toggleToolbar, active, input, setInput, field, submit, bookmark, saved, favorite, favorited, toggleMenu, menu, open, focus, onBlur, suggestions, suggestionIndex, onKeyDown, goHome, newWindow, minimal }: {
   variant: 'top' | 'side' | 'palette'; toggleToolbar: () => void; active?: Tab; input: string; setInput: (value: string) => void; field: RefObject<HTMLInputElement | null>
   submit: (value: string) => void; bookmark: () => void; saved: boolean; favorite: () => void; favorited: boolean
   toggleMenu: (menu: 'options' | 'extensions') => void; menu: string | null
   open: (page: Page | 'assistant') => void; focus: () => void; onBlur: () => void
   goHome: () => void; newWindow: () => void
+  minimal?: boolean
   suggestions: { title: string; url: string }[]; suggestionIndex: number; onKeyDown: React.KeyboardEventHandler<HTMLInputElement>
 }) {
   const action = (name: 'back' | 'forward' | 'reload' | 'stop') => {
@@ -39,7 +40,7 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
           role="combobox" aria-expanded={suggestions.length > 0} aria-autocomplete="list" aria-controls={suggestions.length ? 'address-suggestions' : undefined}
           aria-activedescendant={suggestionIndex >= 0 ? 'suggestion-' + suggestionIndex : undefined}
           placeholder={variant === 'side' ? 'Search or URL' : 'Search or enter a URL'} value={input} onChange={event => setInput(event.target.value)} onFocus={focus} onBlur={onBlur} onKeyDown={onKeyDown} />
-        {!atHome && <Tool label={favorited ? 'Edit page favorite' : 'Add page to Favorites'} className={favorited ? 'starred' : ''}
+      {!minimal && !atHome && <Tool label={favorited ? 'Edit page favorite' : 'Add page to Favorites'} className={favorited ? 'starred' : ''}
           onClick={favorite}><Heart size={15} /></Tool>}
         <Tool label={saved ? 'Edit bookmark' : 'Bookmark this page'} disabled={atHome} className={saved ? 'starred' : ''} onClick={bookmark}><Star size={16} /></Tool>
       </form>
@@ -49,7 +50,7 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
       </div>}
     </div>
     {variant !== 'palette' && <div className="toolbar-actions">
-      {variant === 'top' && <Tool label="Extensions" onClick={() => open('extensions')}><Puzzle size={17} /></Tool>}
+      {variant === 'top' && !minimal && <Tool label="Extensions" onClick={() => open('extensions')}><Puzzle size={17} /></Tool>}
       <Tool label="Browser menu" onClick={() => toggleMenu('options')}><Ellipsis size={20} /></Tool>
       {menu && <div className="browser-menu">
         {menu === 'options' && <>
@@ -64,4 +65,19 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
       </div>}
     </div>}
   </div>
+}
+
+export function TopTabs({ tabs, active, select, close, add }: {
+  tabs: Tab[]; active?: string; select: (id: string) => void; close: (id: string) => void; add: () => void
+}) {
+  return <nav className="top-tabs" aria-label="Top tabs">
+    <div className="top-tabs-list">
+      {tabs.map(tab => <div className="top-tab" key={tab.id} data-selected={tab.id === active}>
+        <button type="button" className="top-tab-select" title={tab.title} aria-label={tab.title}
+          aria-current={tab.id === active ? 'page' : undefined} onClick={() => select(tab.id)}><Favicon tab={tab} /><span>{tab.title}</span></button>
+        <Tool label={'Close ' + tab.title} onClick={() => close(tab.id)}><X size={13} /></Tool>
+      </div>)}
+    </div>
+    <Tool label="New tab" onClick={add}><Plus size={17} /></Tool>
+  </nav>
 }

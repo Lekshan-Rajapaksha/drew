@@ -31,6 +31,9 @@ export interface Settings {
   sidebarWidth: string
   downloadPath: string
   topToolbar: boolean
+  sidebarStyle: 'full' | 'compact'
+  topTabs: 'above' | 'below' | 'hidden'
+  topActions: 'full' | 'minimal'
   keepSidebarOpen: boolean
   favoriteSize: string
   homeRecent: boolean
@@ -48,6 +51,7 @@ export const defaultSettings: Settings = {
   engine: 'google', homepage: HOME, startup: 'restore', theme: 'dark',
   background: 'match', accentColor: '', accentEnd: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
   homeRecent: true, homeClock: true, homeSuggestions: true,
+  sidebarStyle: 'full', topTabs: 'above', topActions: 'full',
   homeDensity: 'relaxed', motion: 'system', sidebarDismiss: 'balanced', notificationPolicy: 'approved', keyboardShortcuts: '{}',
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
@@ -73,7 +77,8 @@ export interface Favorite { id: string; url: string; title: string; favicon: str
 export interface ArchivedTab { id: string; url: string; title: string; archivedAt: number }
 export interface ViewRect { x: number; y: number; width: number; height: number }
 export interface PaneRect extends ViewRect { id: string }
-export interface BrowserImportSource { id: string; label: string }
+export type BrowserBrand = 'Chrome' | 'Arc' | 'Dia' | 'Ardia' | 'Opera' | 'Opera GX' | 'Edge' | 'Brave' | 'Vivaldi' | 'Chromium'
+export interface BrowserImportSource { id: string; label: string; browser: BrowserBrand }
 export interface BrowserImportResult { bookmarks: number; visits: number; passwords: number; notes: string[] }
 export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords'
 
@@ -85,7 +90,11 @@ export interface BrowserState {
   passwords: SavedLogin[];
   extensions: ProfileExtension[];
   favorites: Favorite[]; archived: ArchivedTab[];
-  favoritePreviews: Record<string, { items: Favorite[]; size: Settings['favoriteSize'] }>
+  sidebarPreviews: Record<string, {
+    favorites: Favorite[]; size: Settings['favoriteSize']; tabs: Tab[]; groups: TabGroup[]
+    settings: Pick<Settings, 'theme' | 'accentColor' | 'accentEnd' | 'topToolbar' | 'keyboardShortcuts'>
+  }>
+  otherWindowTabs: Tab[]
   workspaceId: string; profileId: string; workspaces: Workspace[]; tabs: Tab[]; groups: TabGroup[];
   bookmarks: Bookmark[]; folders: Folder[]; downloads: Download[];
   settings: Settings; permissions: SitePermission[];
@@ -95,8 +104,10 @@ export interface Commands {
   newWindow: []
   home: []
   setGradient: [string, string]
+  setNavigationLayout: ['sidebar' | 'compact' | 'top']
   closeTab: [id: string]
   selectTab: [id: string]
+  focusWindowTab: [id: string]
   saveLogin: [url: string, username: string, password: string]
   copyLogin: [id: string]
   removeLogin: [id: string]

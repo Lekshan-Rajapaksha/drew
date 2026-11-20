@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
+import type { BrowserBrand, BrowserImportSource } from '../../shared/model.js'
 
 type Link = { url: string; title: string; folder: string }
 type Entry = { url: string; title: string; visitedAt: number }
-type Source = { id: string; label: string; path: string }
+type Source = BrowserImportSource & { path: string }
 const maxFileSize = 16 * 1024 * 1024
 
 export async function readImportFile(path: string) {
@@ -39,10 +40,15 @@ function addLink(links: Link[], value: string, title: string, folder: string) {
 export function exportedLinks(text: string, markdown = false): Link[] {
   const links: Link[] = []
   if (markdown) {
-    let folder = ''
+    const headings: { level: number; name: string }[] = []
     for (const line of text.split(/\r?\n/)) {
-      const heading = /^#{1,6}\s+(.+)$/.exec(line)
-      if (heading) folder = heading[1].trim()
+      const heading = /^(#{1,6})\s+(.+)$/.exec(line)
+      if (heading) {
+        const level = heading[1].length
+        while ((headings.at(-1)?.level ?? 0) >= level) headings.pop()
+        headings.push({ level, name: heading[2].trim() })
+      }
+      const folder = headings.map(item => item.name).join(' › ')
       for (const link of line.matchAll(/\[([^\]]+)\]\((<https?:\/\/[^>]+>|https?:\/\/[^\s()]*(?:\([^\s()]*\)[^\s()]*)*)\)/gi)) {
         addLink(links, link[2].replace(/^<|>$/g, ''), link[1], folder)
       }
@@ -89,7 +95,7 @@ export async function detectSources(): Promise<Source[]> {
   const win = process.platform === 'win32'
   const base = mac ? join(home, 'Library', 'Application Support')
     : win ? process.env.LOCALAPPDATA || join(home, 'AppData', 'Local') : join(home, '.config')
-  const roots = [
+  const roots: [BrowserBrand, string][] = [
     ['Chrome', win ? 'Google/Chrome/User Data' : mac ? 'Google/Chrome' : 'google-chrome'],
     ['Edge', win ? 'Microsoft/Edge/User Data' : mac ? 'Microsoft Edge' : 'microsoft-edge'],
     ['Brave', 'BraveSoftware/Brave-Browser' + (win ? '/User Data' : '')],
@@ -98,8 +104,12 @@ export async function detectSources(): Promise<Source[]> {
     ['Arc', 'Arc/User Data'],
     ['Dia', 'Dia/User Data'],
     ['Ardia', 'Ardia/User Data'],
+    ['Opera', mac ? 'com.operasoftware.Opera' : 'opera'],
+    ['Opera GX', mac ? 'com.operasoftware.OperaGX' : 'opera-gx'],
   ]
   if (win) {
+    const roaming = process.env.APPDATA || join(home, 'AppData', 'Roaming')
+    roots.push(['Opera', join(roaming, 'Opera Software', 'Opera Stable')], ['Opera GX', join(roaming, 'Opera Software', 'Opera GX Stable')])
     const packages = await readdir(join(base, 'Packages'), { withFileTypes: true }).catch(() => [])
     for (const entry of packages) {
       if (entry.isDirectory() && /^TheBrowserCompany\.Arc_/i.test(entry.name)) {
@@ -107,15 +117,21 @@ export async function detectSources(): Promise<Source[]> {
       }
     }
   }
-  const lists = await Promise.all(roots.map(async ([name, root]) => {
-    const parent = join(base, root)
+  const lists = await Promise.all(roots.map(async ([name, root], index) => {
+    const parent = isAbsolute(root) ? root : join(base, root)
     const dirs = await readdir(parent, { withFileTypes: true }).catch(() => [])
+    const localState = await readImportFile(join(parent, 'Local State')).then(contents => {
+      const state = JSON.parse(contents) as { profile?: { info_cache?: Record<string, { name?: unknown }> } }
+      return state.profile?.info_cache ?? {}
+    }).catch(() => ({} as Record<string, { name?: unknown }>))
     const folders = ['', ...dirs.filter(item => item.isDirectory() && /^(Default|Profile [\d]+)$/.test(item.name))
       .map(item => item.name).sort()]
     return (await Promise.all(folders.map(async folder => {
       const path = join(parent, folder)
       const valid = await isFile(join(path, 'Bookmarks')) || await isFile(join(path, 'History'))
-      return valid ? [{ id: root + '/' + folder, label: folder && folder !== 'Default' ? name + ' · ' + folder : name, path }] : []
+      const label = localState[folder]?.name
+      return valid ? [{ id: index + ':' + folder, label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 70) : folder || 'Default',
+        browser: name, path }] : []
     }))).flat()
   }))
   return lists.flat()

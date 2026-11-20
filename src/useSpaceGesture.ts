@@ -1,17 +1,18 @@
 import { useEffect, useRef } from 'react'
 import type { SpaceScroll, Workspace } from '../shared/model'
 
-export type SwipePreview = { id: string; direction: number; progress: number }
+export type SwipePreview = { id: string; direction: number; progress: number; settling?: boolean }
 
 export function useSpaceGesture(
   spaces: Workspace[], active: string, select: (id: string, direction?: number) => void, sidebarLimit: number,
-  preview: (value: SwipePreview | null) => void,
+  preview: (value: SwipePreview | null) => void, animate: boolean,
 ) {
   const wheel = useRef({ distance: 0, last: -Infinity, consumed: false })
   const native = useRef({ available: false, distance: 0, consumed: false })
   const route = useRef({ actual: active, queued: [] as string[] })
   const touch = useRef<{ x: number; y: number } | null>(null)
   const wheelIdle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const pending = useRef<{ timer: ReturnType<typeof setTimeout>; commit: () => void } | null>(null)
   const overSidebar = (target: EventTarget) => Boolean((target as Element).closest?.('.spatial-sidebar'))
   const neighbor = (direction: number) => {
     const prediction = route.current
@@ -28,14 +29,24 @@ export function useSpaceGesture(
   const showPreview = (distance: number, threshold: number) => {
     const direction = Math.sign(distance)
     const id = direction && neighbor(direction)
-    preview(id ? { id, direction, progress: Math.min(1, Math.abs(distance) / threshold) } : null)
+    if (animate && !pending.current) preview(id ? { id, direction, progress: Math.min(.78, Math.abs(distance) / threshold * .78) } : null)
   }
-  const advance = (direction: number) => {
+  const advance = (direction: number, wheelGesture = false) => {
     const next = neighbor(direction)
     if (!next) return
     route.current.queued.push(next)
-    preview({ id: next, direction, progress: .9 })
-    select(next, direction)
+    if (pending.current) {
+      clearTimeout(pending.current.timer)
+      pending.current.commit()
+    }
+    if (!animate) { select(next, direction); return }
+    preview({ id: next, direction, progress: 1, settling: true })
+    const commit = () => {
+      pending.current = null
+      if (wheelGesture) wheel.current.last = performance.now()
+      select(next, direction)
+    }
+    pending.current = { commit, timer: setTimeout(commit, 250) }
   }
   const receive = useRef<(event: SpaceScroll) => void>(() => {})
   useEffect(() => {
@@ -43,7 +54,7 @@ export function useSpaceGesture(
       if (event.momentum) return
       const gesture = native.current
       if (event.phase === 'begin' || event.phase === 'end') {
-        if (event.phase === 'begin' || !gesture.consumed) preview(null)
+        if (!pending.current && (event.phase === 'begin' || !gesture.consumed)) preview(null)
         gesture.distance = 0
         gesture.consumed = false
       }
@@ -60,9 +71,16 @@ export function useSpaceGesture(
   useEffect(() => {
     void window.lexn.usesNativeSpaceScroll().then(available => { native.current.available = available }).catch(() => {})
     const unsubscribe = window.lexn.onSpaceScroll(event => receive.current(event))
-    return () => { unsubscribe(); clearTimeout(wheelIdle.current) }
+    return () => { unsubscribe(); clearTimeout(wheelIdle.current); clearTimeout(pending.current?.timer) }
   }, [])
   return {
+    cancelSwipe: () => {
+      clearTimeout(wheelIdle.current)
+      clearTimeout(pending.current?.timer)
+      pending.current = null
+      route.current.queued = []
+      preview(null)
+    },
     onWheel: (event: React.WheelEvent) => {
       if (native.current.available && event.nativeEvent.isTrusted) return
       if (event.ctrlKey || !overSidebar(event.target)) return
@@ -71,7 +89,8 @@ export function useSpaceGesture(
       if (horizontal && event.deltaMode !== 0) { advance(Math.sign(dx)); return }
       const now = performance.now()
       const gesture = wheel.current
-      if (now - gesture.last >= 175 || (horizontal && gesture.consumed && Math.sign(dx) !== Math.sign(gesture.distance))) {
+      const quietPeriod = gesture.consumed ? 270 : 175
+      if (now - gesture.last >= quietPeriod || (horizontal && gesture.consumed && Math.sign(dx) !== Math.sign(gesture.distance))) {
         gesture.distance = 0
         gesture.consumed = false
       }
@@ -82,11 +101,11 @@ export function useSpaceGesture(
       clearTimeout(wheelIdle.current)
       if (Math.abs(gesture.distance) < 52) {
         showPreview(gesture.distance, 52)
-        wheelIdle.current = setTimeout(() => preview(null), 175)
+        wheelIdle.current = setTimeout(() => { if (!pending.current) preview(null) }, 175)
         return
       }
       gesture.consumed = true
-      advance(Math.sign(gesture.distance))
+      advance(Math.sign(gesture.distance), true)
     },
     onTouchStart: (event: React.TouchEvent) => {
       const point = event.touches[0]

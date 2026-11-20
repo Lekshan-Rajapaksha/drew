@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { app, clipboard, dialog, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
+import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
@@ -10,21 +10,30 @@ import { showExtension } from './extensions.js'
 import { detectSources, exportedLinks, passwordRows, readChromium, readImportFile, saveImported } from './importData.js'
 import type { Downloads } from './profile.js'
 
-export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow): BrowserState {
+export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow, otherWindowTabs: Tab[]): BrowserState {
   const profile = tabs.profileId
   const workspaces = tabs.workspaces()
+  const localTabs = tabs.list()
+  const groups = db.all<TabGroup>('SELECT * FROM tab_groups ORDER BY rowid')
+  const previews = new Map(workspaces.map(space => space.profileId ?? space.id).map(id => {
+    const { favoriteSize: size, theme, accentColor, accentEnd, topToolbar, keyboardShortcuts } = db.settings(id)
+    return [id, { size, settings: { theme, accentColor, accentEnd, topToolbar, keyboardShortcuts },
+      favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id) }] as const
+  }))
   return {
     welcomePending: db.get('welcomePending', false),
     windowMaximized: window.isMaximized(),
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
     workspaceId: tabs.workspaceId, profileId: profile, extensions: downloads.extensions(profile),
     favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid', profile),
-    favoritePreviews: Object.fromEntries([...new Set(workspaces.map(space => space.profileId ?? space.id))].map(id => [id, {
-      items: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id),
-      size: db.settings(id).favoriteSize,
+    sidebarPreviews: Object.fromEntries(workspaces.filter(space => space.id !== tabs.workspaceId).map(space => [space.id, {
+      ...previews.get(space.profileId ?? space.id)!,
+      tabs: localTabs.filter(tab => tab.workspaceId === space.id).slice(0, 20),
+      groups: groups.filter(group => group.workspaceId === space.id),
     }])),
-    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces, tabs: tabs.list().filter(tab => tab.workspaceId === tabs.workspaceId),
-    groups: db.all<TabGroup>('SELECT * FROM tab_groups WHERE workspaceId = ? ORDER BY rowid', tabs.workspaceId),
+    otherWindowTabs,
+    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces, tabs: localTabs.filter(tab => tab.workspaceId === tabs.workspaceId),
+    groups: groups.filter(group => group.workspaceId === tabs.workspaceId),
     bookmarks: db.all<Bookmark>('SELECT id, title, url, folderId FROM bookmarks WHERE workspaceId = ? ORDER BY rowid DESC', profile),
     folders: db.all<Folder>('SELECT id, name FROM bookmark_folders WHERE workspaceId = ? ORDER BY name', profile),
     downloads: downloads.list(profile), settings: db.settings(tabs.profileId),
@@ -76,8 +85,9 @@ function boolean(value: unknown) {
 export function bindIpc(
   window: BrowserWindow, uiUrl: string, db: Database, tabs: Tabs,
   downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll: () => boolean, newWindow: () => void,
+  peerTabs: () => Tab[], focusWindowTab: (tabId: string) => void,
 ) {
-  const state = () => browserState(db, tabs, downloads, window)
+  const state = () => browserState(db, tabs, downloads, window, peerTabs())
   const currentTab = (value: unknown) => {
     const tabId = id(value)
     if (!tabs.list().some(tab => tab.id === tabId && tab.workspaceId === tabs.workspaceId)) throw new Error('Tab was not found in this Space.')
@@ -86,6 +96,14 @@ export function bindIpc(
   const commands: { [K in keyof Commands]: (...args: unknown[]) => void | Promise<void> } = {
     newWindow,
     home: () => tabs.home(),
+    setNavigationLayout: value => {
+      const layout = choice(value, ['sidebar', 'compact', 'top'])
+      const profile = tabs.profileId
+      db.transaction(() => {
+        db.setProfileSetting(profile, 'topToolbar', layout === 'top')
+        db.setProfileSetting(profile, 'sidebarStyle', layout === 'compact' ? 'compact' : 'full')
+      })
+    },
     setGradient: (first, end) => {
       const profile = tabs.profileId
       const startColor = hexColor(first), endColor = hexColor(end)
@@ -97,6 +115,7 @@ export function bindIpc(
     newTab: value => { tabs.create(value === undefined ? HOME : addressToUrl(text(value, 8192), db.settings(tabs.profileId).engine)) },
     closeTab: value => tabs.close(currentTab(value)),
     selectTab: value => tabs.select(id(value)),
+    focusWindowTab: value => focusWindowTab(id(value)),
     saveLogin: async (value, user, password) => {
       const profile = tabs.profileId
       const origin = originOf(site(value))!
@@ -238,6 +257,9 @@ export function bindIpc(
         case 'startup': db.setProfileSetting(profile, key, choice(value, ['restore', 'home', 'blank'])); break
         case 'theme': db.setProfileSetting(profile, key, choice(value, Object.keys(profileThemes))); break
         case 'background': db.setProfileSetting(profile, key, choice(value, ['violet', 'forest', 'midnight', 'black', 'match'])); break
+        case 'sidebarStyle': db.setProfileSetting(profile, key, choice(value, ['full', 'compact'])); break
+        case 'topTabs': db.setProfileSetting(profile, key, choice(value, ['above', 'below', 'hidden'])); break
+        case 'topActions': db.setProfileSetting(profile, key, choice(value, ['full', 'minimal'])); break
         case 'accentEnd':
         case 'accentColor': db.setProfileSetting(profile, key, value === '' ? '' : hexColor(value)); break
         case 'colorIntensity': db.setProfileSetting(profile, key, choice(value, ['subtle', 'balanced', 'vivid'])); break
@@ -350,7 +372,7 @@ export function bindIpc(
   invoke('lexn:uses-native-space-scroll', nativeSpaceScroll)
   invoke('lexn:history', query => db.history(text(query), tabs.profileId))
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
-  invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label }) => ({ id, label })))
+  invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label, browser }) => ({ id, label, browser })))
   invoke('lexn:import-browser', async (value, selected) => {
     const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords'])
     const profile = tabs.profileId

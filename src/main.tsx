@@ -17,7 +17,7 @@ import { Passwords } from './Passwords'
 import { Settings, type SettingsSection } from './Settings'
 import { Sidebar } from './Sidebar'
 import { command, useApp, type Page } from './state'
-import { Toolbar } from './Toolbar'
+import { Toolbar, TopTabs } from './Toolbar'
 import { Welcome } from './Welcome'
 import { WindowControls } from './WindowControls'
 import { Overlay, Tool, Wordmark } from './ui'
@@ -120,7 +120,6 @@ function Browser() {
   const { setBrowser, setPage, setError } = useApp.getState()
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('General')
   const [swipePreview, setSwipePreview] = useState<SwipePreview | null>(null)
-  const [entryDirection, setEntryDirection] = useState(0)
   const [resized, setResized] = useState<number | null>(null)
   const [resizingSidebar, setResizingSidebar] = useState(false)
   const [pendingPin, setPendingPin] = useState<boolean | null>(null)
@@ -152,7 +151,8 @@ function Browser() {
   const space = spaces.find(item => item.id === browser?.workspaceId)
   const profileId = browser?.profileId ?? ''
   const savedWidth = Number(browser?.settings.sidebarWidth) || 284
-  const width = resized ?? savedWidth
+  const compact = browser?.settings.sidebarStyle === 'compact'
+  const width = compact ? 76 : resized ?? savedWidth
   const active = browser?.tabs.find(tab => tab.id === space?.activeTab)
   const activeUrl = active && active.url !== HOME ? active.url : ''
   const favorite = browser?.favorites.find(item => item.url === activeUrl)
@@ -184,7 +184,7 @@ function Browser() {
     '--sidebar-gap': SIDEBAR_VERTICAL_GAP + 'px', '--caption-inset': WINDOW_CONTROLS_INSET + 'px',
     '--caption-width': WINDOW_CONTROLS_WIDTH + 'px', '--sidebar-radius': SIDEBAR_RADIUS + 'px', '--sidebar-width': width + 'px', '--accent': accent, '--accent-end': accentEnd, '--color-intensity': intensity,
   } as CSSProperties
-  useLayoutEffect(() => { setSwipePreview(null) }, [space?.id])
+  useLayoutEffect(() => { setSwipePreview(current => current?.id === space?.id ? null : current) }, [space?.id])
 
   useLayoutEffect(() => {
     const node = viewport.current
@@ -269,7 +269,7 @@ function Browser() {
   }, [width])
   const edgeZone = pointerZone === 'edge'
   const withinSidebar = pointerZone !== 'outside'
-  const holdSidebar = Boolean(dragging || modal || palette || context || favoriteMenu || editing || resizingSidebar)
+  const holdSidebar = Boolean(dragging || modal || palette || context || favoriteMenu || editing || resizingSidebar || swipePreview)
   const dismissDelay = { quick: 70, balanced: 140, relaxed: 350 }[browser?.settings.sidebarDismiss ?? 'balanced']
   useEffect(() => {
     if (edgeZone) {
@@ -396,8 +396,7 @@ function Browser() {
   }
   const switchProfile = (id: string, swipe?: number) => {
     if (id === space?.id && swipe === undefined) return
-    setEntryDirection(swipe ?? 0)
-    if (swipe === undefined) setSwipePreview(null)
+    if (swipe === undefined) cancelSwipe()
     setPalette(null); setMenu(null); setEditing(false); setResults([]); setPage(null)
     setSplitIds([]); setContext(null); setFavoriteMenu(null)
     void command('workspace', id).then(ok => { if (!ok) setSwipePreview(null) })
@@ -411,7 +410,7 @@ function Browser() {
     if (!existing.includes(id) && existing.length < 4) setSplitIds([...existing, id])
     setPalette(null); setContext(null); setPage(null)
   }
-  const gesture = useSpaceGesture(spaces, space?.id ?? '', switchProfile, collapsed ? 0 : width, setSwipePreview)
+  const { cancelSwipe, ...gesture } = useSpaceGesture(spaces, space?.id ?? '', switchProfile, collapsed ? 0 : width, setSwipePreview, animate && !collapsed)
   const confirm = (title: string, description: string, action: () => Promise<void>) =>
     setModal({ kind: 'confirm', title, description, action })
 
@@ -426,7 +425,7 @@ function Browser() {
     setMenu(null); setPalette(null); setEditing(false)
     void command('setSetting', 'topToolbar', !topToolbar)
   }
-  const toolbar = (variant: 'top' | 'side' | 'palette') => <Toolbar variant={variant} toggleToolbar={toggleToolbar} goHome={goHome} newWindow={newWindow} active={active} input={editing ? address : activeUrl} setInput={value => {
+  const toolbar = (variant: 'top' | 'side' | 'palette') => <Toolbar variant={variant} toggleToolbar={toggleToolbar} goHome={goHome} newWindow={newWindow} minimal={variant === 'top' && browser.settings.topActions === 'minimal'} active={active} input={editing ? address : activeUrl} setInput={value => {
         setAddress(value); setSelected(-1); setResults([])
       }} field={field} submit={navigate} saved={Boolean(saved)}
         bookmark={() => { if (active && webUrl(activeUrl)) setModal({ kind: 'bookmark', item: saved, source: active }) }}
@@ -448,6 +447,8 @@ function Browser() {
           }
         }} />
   const controls = !isMac && <WindowControls maximized={browser.windowMaximized} />
+  const topTabs = topToolbar && browser.settings.topTabs !== 'hidden' && <TopTabs tabs={browser.tabs}
+    active={page ? undefined : active?.id} select={select} close={id => { void command('closeTab', id) }} add={newTab} />
   return <div className={chromeClass + (collapsed ? ' spatial-collapsed' : '') + (locked ? ' sidebar-pinned' : '') + (external || splitVisible ? ' native-page' : '')}
     style={chromeStyle}
     {...gesture}
@@ -461,7 +462,9 @@ function Browser() {
     {captionContent ? createPortal(controls, captionContent) : controls}
     <div className="sidebar-slot" ref={sidebarSlot} />
     {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} open={open}
-      preview={animate && !collapsed ? swipePreview : null} entryDirection={entryDirection}
+      preview={animate && !collapsed ? swipePreview : null} compact={compact} systemDark={systemDark}
+      address={() => { setMenu(null); setPalette('address') }}
+      goHome={goHome}
       pinPending={pendingPin !== null} pinSidebar={() => {
         if (pendingPin !== null) return
         const next = !locked
@@ -486,7 +489,9 @@ function Browser() {
         setContext({ tab, x: Math.min(event.clientX, innerWidth - 228), y: Math.min(event.clientY, innerHeight - 225) })
       }} />, sidebarContent)}
     <main className="main" inert={welcome}>
+      {browser.settings.topTabs === 'above' && topTabs}
       {topToolbar && toolbar('top')}
+      {browser.settings.topTabs === 'below' && topTabs}
 
       <div className="content-layout">
       <section ref={viewport} className={'viewport' + (external ? ' website' : '')} style={reserve ? { marginTop: reserve + 8 } : undefined}>

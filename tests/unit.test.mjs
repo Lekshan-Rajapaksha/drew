@@ -36,6 +36,9 @@ test('browser imports preserve folders and timestamps, ignore duplicates, and st
   db.close()
   assert.deepEqual(exportedLinks('# Favorites\n- [Article](https://example.org/Article_(book))', true),
     [{ url: 'https://example.org/Article_(book)', title: 'Article', folder: 'Favorites' }])
+  assert.deepEqual(exportedLinks('# Work\n## Favorites\n- [Work](https://example.org/work)\n# Personal\n## Favorites\n- [Home](https://example.org/home)', true),
+    [{ url: 'https://example.org/work', title: 'Work', folder: 'Work › Favorites' },
+      { url: 'https://example.org/home', title: 'Home', folder: 'Personal › Favorites' }])
   assert.deepEqual(exportedLinks('<DL><H3>News &amp; Reading</H3><DL><A HREF="https://example.org/?q=1&amp;a=2">Saved</A></DL></DL>'),
     [{ url: 'https://example.org/?q=1&a=2', title: 'Saved', folder: 'News & Reading' }])
   assert.deepEqual(passwordRows('name,url,username,password\r\nFixture,https://example.org/path,"a,b","c""d"\r\n'),
