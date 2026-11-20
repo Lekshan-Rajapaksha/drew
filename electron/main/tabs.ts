@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { BrowserWindow, Menu, View, WebContentsView, type Rectangle, type Session } from 'electron'
+import { BrowserWindow, dialog, View, WebContentsView, type Rectangle, type Session } from 'electron'
 import { HOME, type PaneRect, type SavedTab, type Tab, type Workspace } from '../../shared/model.js'
-import { webUrl } from '../../shared/navigation.js'
+import { originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
+import { fillSavedLogin } from './loginFill.js'
+import { showPageMenu } from './pageMenu.js'
 
 interface LiveTab {
   state: Tab
@@ -32,6 +34,7 @@ export class Tabs {
     private wirePeek?: (url: string, space: string) => void,
     private restoreSession = true,
     initialSpace?: string,
+    private openWindow?: (url: string, space: string) => void,
   ) {
     this.viewport.setVisible(false)
     attachViewport(this.viewport)
@@ -71,6 +74,22 @@ export class Tabs {
     return tab
   }
 
+  private canFill(tab: LiveTab, view: WebContentsView) {
+    return !this.shuttingDown && tab === this.active() && tab.view === view && this.attached.has(view) &&
+      !this.window.isDestroyed() && this.window.isFocused() && !view.webContents.isDestroyed() && !tab.pendingUrl
+  }
+
+  async fillLogin() {
+    const tab = this.active()
+    const view = tab?.view
+    if (!tab || !view) throw new Error('Open a matching HTTPS sign-in page to fill a saved login.')
+    await fillSavedLogin(this.db, this.window, view.webContents, this.storageFor(tab.state.workspaceId), () => this.canFill(tab, view), false)
+  }
+
+  reportPageError(error: unknown) {
+    if (!this.window.isDestroyed()) void dialog.showMessageBox(this.window, { type: 'info', message: String(error instanceof Error ? error.message : error) })
+  }
+
   private makeView(tab: LiveTab) {
     const view = new WebContentsView({
       webPreferences: {
@@ -82,6 +101,12 @@ export class Tabs {
     tab.view = view
     const wc = view.webContents
     const state = tab.state
+    const loginProfile = this.storageFor(state.workspaceId)
+    wc.ipc.on('lexn:offer-login', event => {
+      if (!this.canFill(tab, view) || !wc.isFocused() || event.senderFrame !== wc.mainFrame) return
+      void fillSavedLogin(this.db, this.window, wc, loginProfile, () => this.canFill(tab, view), true)
+        .catch(error => this.reportPageError(error))
+    })
     let lastHistorySwipe = -Infinity
     wc.ipc.on('lexn:history-swipe', (event, direction: unknown) => {
       if (this.shuttingDown || tab.view !== view || !this.attached.has(view) || !this.window.isFocused() ||
@@ -184,12 +209,16 @@ export class Tabs {
       update()
     })
     wc.on('context-menu', (_event, params) => {
-      if (params.linkURL && webUrl(params.linkURL)) {
-        Menu.buildFromTemplate([{
-          label: 'Open Link in New Tab',
-          click: () => this.create(params.linkURL, state.workspaceId, this.workspaceId === state.workspaceId),
-        }]).popup({ window: this.window })
-      }
+      const origin = originOf(wc.getURL())
+      const hasLogin = params.frame === wc.mainFrame && this.canFill(tab, view) && origin?.startsWith('https://') &&
+        this.db.one('SELECT id FROM saved_logins WHERE profileId = ? AND origin = ? LIMIT 1', loginProfile, origin)
+      showPageMenu(this.window, wc, params, {
+        engine: this.db.settings(loginProfile).engine,
+        openTab: (url, foreground) => { this.create(url, state.workspaceId, foreground && this.workspaceId === state.workspaceId) },
+        openWindow: url => this.openWindow?.(url, state.workspaceId),
+        fill: hasLogin ? () => { void this.fillLogin().catch(error => this.reportPageError(error)) } : undefined,
+        report: error => this.reportPageError(error),
+      })
     })
     this.wire(view)
     return view

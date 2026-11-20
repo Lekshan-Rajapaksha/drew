@@ -24,6 +24,7 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
   const [brand, setBrand] = useState<BrowserBrand>('Chrome')
   const [source, setSource] = useState('')
   const [destination, setDestination] = useState(profileId)
+  const [includePasswords, setIncludePasswords] = useState(false)
   const [busy, setBusy] = useState(false)
   const [scanning, setScanning] = useState(true)
   const [status, setStatus] = useState('')
@@ -50,10 +51,26 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
       const result = await window.lexn.importBrowserData(kind, value)
       if (!result) return
       if (result.profiles?.length) setDestination(result.profiles.length === 1 ? result.profiles[0].id : '')
+      const notes = [...result.notes]
+      let passwordCount = result.passwords
+      if (includePasswords && kind !== 'passwords') {
+        for (const item of result.profiles ?? [{ id: profileId, name: currentProfile }]) {
+          setStatus('Choose the password CSV for ' + item.name + '.')
+          try {
+            const accountData = await window.lexn.importBrowserData('passwords', item.id)
+            if (accountData) {
+              passwordCount += accountData.passwords
+              notes.push(...accountData.notes.map(note => item.name + ' · ' + note))
+            } else notes.push('Password import skipped for ' + item.name + '.')
+          } catch (error) {
+            notes.push(item.name + ' · ' + (error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error)))
+          }
+        }
+      }
       const counts = [
         [result.bookmarks, 'bookmark', 'bookmarks'],
         [result.visits, 'history entry', 'history entries'],
-        [result.passwords, 'password', 'passwords'],
+        [passwordCount, 'password', 'passwords'],
         [result.favorites ?? 0, 'Favorite', 'Favorites'],
         [result.pinned ?? 0, 'pinned tab', 'pinned tabs'],
         [result.tabs ?? 0, 'open tab', 'open tabs'],
@@ -61,8 +78,8 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
       const summary = result.profiles?.length
         ? 'Profiles imported: ' + result.profiles.map(item => item.name).join(', ') + '.' + (counts.length ? ' Added ' + counts.join(', ') + '.' : '')
         : counts.length ? 'Imported ' + counts.join(', ') + ' into ' + (kind === 'passwords' ? target?.name ?? currentProfile : currentProfile) + '.'
-        : result.notes.length ? '' : 'No new items were found.'
-      setStatus([summary, ...result.notes].filter(Boolean).join(' '))
+        : notes.length ? '' : 'No new items were found.'
+      setStatus([summary, ...notes].filter(Boolean).join(' '))
     } catch (error) {
       setStatus(error instanceof Error ? error.message.replace(/^Error invoking remote method '[^']+': Error: /, '') : String(error))
     } finally { setBusy(false) }
@@ -92,6 +109,10 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
       </div>
       <p className="import-guide"><Globe2 size={15} aria-hidden="true" />{exportHelp[brand] ?? 'Choose the browser’s Chromium profile folder, or select an HTML bookmarks export.'}</p>
     </div>
+    <label className="import-guide">
+      <input type="checkbox" checked={includePasswords} disabled={busy} onChange={event => setIncludePasswords(event.target.checked)} />
+      Include password CSVs in this import. Drew asks for each Profile’s export. Cancel skips that Profile’s passwords.
+    </label>
     <h3>Import from a file or folder</h3>
     <div className="import-file-actions">
       <button type="button" className="secondary" disabled={busy} onClick={() => { void run('folder') }}><FolderOpen size={16} />Choose Profile folder</button>

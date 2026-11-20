@@ -2,6 +2,7 @@ export const shortcutDefinitions = {
   newWindow: { label: 'New window', binding: 'N' },
   command: { label: 'Open Command Bar', binding: 'T' },
   address: { label: 'Focus address bar', binding: 'L' },
+  fillLogin: { label: 'Fill saved login', binding: 'Shift+L' },
   closeTab: { label: 'Close current tab', binding: 'W' },
   reopenTab: { label: 'Reopen closed tab', binding: 'Shift+T' },
   reload: { label: 'Reload page', binding: 'R' },

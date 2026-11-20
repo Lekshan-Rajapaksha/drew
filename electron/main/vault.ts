@@ -65,11 +65,11 @@ export async function importPasswords(db: Database, profile: string, path: strin
   return { passwords, notes }
 }
 
-export async function copyPassword(db: Database, profile: string, id: string, canCopy: () => boolean) {
-  if (!canCopy()) throw new Error('Focus this Profile’s window before copying a password.')
+export async function unlockLogin(db: Database, profile: string, id: string, canUse: () => boolean, origin?: string) {
+  if (!canUse()) throw new Error('Focus this Profile’s window to use a saved password.')
   const row = db.one<{ origin: string; username: string; encrypted: string }>(
     'SELECT origin, username, encrypted FROM saved_logins WHERE id = ? AND profileId = ?', id, profile)
-  if (!row) throw new Error('Password was not found in this Profile.')
+  if (!row || (origin !== undefined && origin !== row.origin)) throw new Error('Password was not found in this Profile.')
   await requireEncryption()
   const bound = row.encrypted.startsWith(envelope)
   const data = Buffer.from(bound ? row.encrypted.slice(envelope.length) : row.encrypted, 'base64')
@@ -94,13 +94,18 @@ export async function copyPassword(db: Database, profile: string, id: string, ca
     throw new Error('Drew could not unlock the saved password for this account.')
   } finally { data.fill(0) }
   const replacement = !bound || rotate ? await seal(account, password) : row.encrypted
-  if (!canCopy()) throw new Error('The active Profile changed before the password could be copied.')
+  if (!canUse()) throw new Error('The active page or Profile changed before the password could be used.')
   if (replacement !== row.encrypted) {
     const result = db.run('UPDATE saved_logins SET encrypted = ? WHERE id = ? AND profileId = ? AND encrypted = ?', replacement, id, profile, row.encrypted)
     if (!result.changes) throw new Error('The saved password changed. Try again.')
   } else if (!db.one('SELECT id FROM saved_logins WHERE id = ? AND profileId = ? AND encrypted = ?', id, profile, row.encrypted)) {
     throw new Error('The saved password changed. Try again.')
   }
+  return { username: row.username, password }
+}
+
+export async function copyPassword(db: Database, profile: string, id: string, canCopy: () => boolean) {
+  const { password } = await unlockLogin(db, profile, id, canCopy)
   const revision = ++clipboardRevision
   await clipboard.writeText(password)
   if (revision !== clipboardRevision) return

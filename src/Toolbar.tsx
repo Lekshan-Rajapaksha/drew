@@ -62,6 +62,7 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
           <button onClick={() => open('archive')}><Archive size={16} /> Archived tabs</button>
           <button onClick={() => open('assistant')}><Sparkles size={16} /> Page assistant</button>
           <button onClick={() => open('extensions')}><Puzzle size={16} /> Extensions</button>
+          <button disabled={atHome} onClick={() => { toggleMenu('options'); void command('fillLogin') }}><KeyRound size={16} /> Fill saved login</button>
           <button onClick={() => open('passwords')}><KeyRound size={16} /> Passwords</button>
           <button onClick={() => open('settings')}><Settings2 size={16} /> Settings</button>
         </>}

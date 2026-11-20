@@ -10,7 +10,7 @@ export function Passwords({ entries }: { entries: SavedLogin[] }) {
   const [notice, setNotice] = useState('')
   const [saving, setSaving] = useState(false)
   return <div className="management">
-    <PageHeader icon={<KeyRound size={24} />} title="Passwords" subtitle="Save and copy passwords for this Profile." />
+    <PageHeader icon={<KeyRound size={24} />} title="Passwords" subtitle="Use a saved account from the password field on a matching HTTPS sign-in page." />
     <form className="vault-form" autoComplete="off" onSubmit={event => {
       event.preventDefault()
       if (saving) return

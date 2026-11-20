@@ -172,7 +172,7 @@ function Browser() {
   const showView = external && !overlay
   const floatsAboveWebsite = !welcome && !locked && (external || splitVisible) &&
     !modal && !palette && !context && !favoriteMenu
-  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 366 : 0) : 0
+  const reserve = external && !overlay && topToolbar ? Math.max(suggestions.length ? 16 + suggestions.length * 36 : 0, menu ? 397 : 0) : 0
   const animate = browser?.settings.motion !== 'off' && !matchMedia('(prefers-reduced-motion: reduce)').matches
   const theme = browser?.settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : browser?.settings.theme ?? 'dark'
   const accent = browser?.settings.accentColor || themeAccents[theme] || space?.accent || accents[0]
@@ -462,7 +462,7 @@ function Browser() {
     {!topToolbar && <div className="window-drag-zone" aria-hidden="true" />}
     {captionContent ? createPortal(controls, captionContent) : controls}
     <div className="sidebar-slot" ref={sidebarSlot} />
-    {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked}
+    {createPortal(<Sidebar browser={browser} space={space} active={active} page={page} collapsed={collapsed} locked={locked} open={open}
       preview={animate && !collapsed ? swipePreview : null} compact={compact} systemDark={systemDark}
       address={() => { setMenu(null); setPalette('address') }}
       openActions={newTab}

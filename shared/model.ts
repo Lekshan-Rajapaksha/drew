@@ -114,6 +114,7 @@ export interface Commands {
   focusWindowTab: [id: string]
   saveLogin: [url: string, username: string, password: string]
   copyLogin: [id: string]
+  fillLogin: []
   removeLogin: [id: string]
   loadExtension: []
   removeExtension: [id: string]

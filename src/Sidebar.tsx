@@ -4,12 +4,13 @@ import { HOME, themeAccents, type BrowserState, type Favorite, type Tab, type Ta
 import { effectiveShortcuts, shortcutLabel } from '../shared/shortcuts'
 import { command, type Page } from './state'
 import { Favorites } from './Favorites'
+import { ServiceRail } from './ServiceRail'
 import { Favicon, Tool } from './ui'
 import type { SwipePreview } from './useSpaceGesture'
 
 type SidebarProps = {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
-  pinPending: boolean; pinSidebar: () => void; openActions: () => void; select: (id: string) => void; newTab: () => void
+  pinPending: boolean; pinSidebar: () => void; openActions: () => void; open: (page: Page) => void; select: (id: string) => void; newTab: () => void
   workspaceEditor: (space?: Workspace, sameProfile?: boolean) => void; groupEditor: (parent?: string) => void;
   switchProfile: (id: string, direction?: number) => void; chrome: ReactNode;
   context: (event: React.MouseEvent, tab: Tab) => void; resize: (event: React.PointerEvent<HTMLDivElement>) => void
@@ -42,7 +43,7 @@ export function Sidebar(props: SidebarProps) {
           chrome={!compact && !next.settings.topToolbar ? <PreviewToolbar url={next.tabs.find(tab => tab.id === neighbor.activeTab)?.url} /> : null} />
       </div>}
     </div>
-    <ProfileStrip browser={browser} space={props.space} switchProfile={props.switchProfile} workspaceEditor={props.workspaceEditor} />
+    <ProfileStrip browser={browser} space={props.space} page={props.page} open={props.open} switchProfile={props.switchProfile} workspaceEditor={props.workspaceEditor} />
     {!compact && <div className="resize-handle" role="separator" aria-label="Sidebar width" aria-orientation="vertical" onPointerDown={resize} />}
   </aside>
 }
@@ -141,9 +142,10 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
   </>
 }
 
-function ProfileStrip({ browser, space, switchProfile, workspaceEditor }: Pick<SidebarProps, 'browser' | 'space' | 'switchProfile' | 'workspaceEditor'>) {
+function ProfileStrip({ browser, space, page, open, switchProfile, workspaceEditor }: Pick<SidebarProps, 'browser' | 'space' | 'page' | 'open' | 'switchProfile' | 'workspaceEditor'>) {
   const [creating, setCreating] = useState(false)
   return <footer className="spatial-footer">
+    <ServiceRail page={page} open={open} />
     <div className="space-strip">
       <button type="button" className="space-name" title="Edit Space" aria-label="Edit Space" onClick={() => workspaceEditor(space)}><span key={space.id}>{space.icon || space.name}</span></button>
       <nav className="profile-dots" aria-label="Browser profiles">

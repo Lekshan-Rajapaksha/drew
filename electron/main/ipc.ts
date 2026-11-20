@@ -131,6 +131,7 @@ export function bindIpc(
       const profile = tabs.profileId
       await copyPassword(db, profile, id(value), () => !window.isDestroyed() && window.isFocused() && tabs.profileId === profile)
     },
+    fillLogin: () => tabs.fillLogin(),
     removeLogin: value => { db.run('DELETE FROM saved_logins WHERE id = ? AND profileId = ?', id(value), tabs.profileId) },
     loadExtension: async () => {
       const profile = tabs.profileId
@@ -366,7 +367,8 @@ export function bindIpc(
   invoke('lexn:import-browser', async (value, selected) => {
     const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords', 'profiles', 'profile-folder', 'profile-markdown'])
     const profile = kind === 'passwords' && selected !== undefined ? id(selected) : tabs.profileId
-    if (kind === 'passwords' && !db.one('SELECT id FROM workspaces WHERE id = ? AND profileId IS NULL', profile)) {
+    const passwordProfile = kind === 'passwords' ? db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ? AND profileId IS NULL', profile) : undefined
+    if (kind === 'passwords' && !passwordProfile) {
       throw new Error('Choose a Drew Profile for these passwords.')
     }
     const brand = () => choice(selected, ['Chrome', 'Arc', 'Dia', 'Ardia', 'Opera', 'Opera GX', 'Edge', 'Brave', 'Vivaldi', 'Chromium'] as const)
@@ -391,7 +393,7 @@ export function bindIpc(
       path = source.path
     } else {
       const result = await dialog.showOpenDialog(window, {
-        title: kind === 'passwords' ? 'Import saved accounts into Drew' : undefined,
+        title: passwordProfile ? 'Choose password CSV for ' + passwordProfile.name : undefined,
         properties: [kind === 'folder' || kind === 'profile-folder' ? 'openDirectory' : 'openFile'],
         filters: kind === 'bookmarks' ? [{ name: 'Browser exports', extensions: ['html', 'htm', 'md'] }]
           : kind === 'profile-markdown' ? [{ name: 'Profile or Space export', extensions: ['md'] }]

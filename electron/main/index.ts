@@ -51,7 +51,7 @@ function foreground() {
   target.focus()
 }
 
-function createWindow(initialSpace?: string) {
+function createWindow(initialSpace?: string, initialUrl?: string) {
   const db = database ??= new Database(join(app.getPath('userData'), 'lexn.sqlite'))
   const restoreSession = windows.size === 0
   const browser = new BrowserWindow({
@@ -136,6 +136,9 @@ function createWindow(initialSpace?: string) {
       case 'reload':
         if (current) tabs.action(current, 'reload')
         break
+      case 'fillLogin':
+        if (!input.isAutoRepeat) void tabs.fillLogin().catch(error => tabs.reportPageError(error))
+        break
       default: shortcut(action)
     }
   })
@@ -149,7 +152,12 @@ function createWindow(initialSpace?: string) {
   }
   const sidebar = new FloatingSidebar(browser, wireKeys)
   const tabs: Tabs = new Tabs(browser, db, id => downloads!.sessionFor(id), notifyWindows,
-    view => { wireKeys(view.webContents) }, view => sidebar.addWebsite(view), preview, restoreSession, initialSpace)
+    view => { wireKeys(view.webContents) }, view => sidebar.addWebsite(view), preview, restoreSession, initialSpace,
+    (url, space) => { createWindow(space, url) })
+  if (initialUrl) {
+    const firstTab = tabs.active()
+    if (firstTab) tabs.navigate(firstTab.state.id, initialUrl)
+  }
   const windowId = browser.id
   windows.set(windowId, { browser, preview, changed, tabs })
   notifyWindows()

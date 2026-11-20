@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { createServer } from 'node:http'
+import { createServer as createSecureServer } from 'node:https'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -176,7 +178,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await waitUntil(async () => page.locator('.address-site-icon img').evaluate(img => img.complete && img.naturalWidth > 0), 'website favicon did not load')
   await page.getByRole('button', { name: 'Add page to Favorites' }).click()
   await page.getByRole('button', { name: 'Edit page favorite' }).waitFor()
-  assert.equal(await page.getByRole('navigation', { name: 'Browser services' }).count(), 0)
+  assert.equal(await page.locator('.spatial-footer').getByRole('navigation', { name: 'Browser services' }).count(), 1)
   await page.getByRole('button', { name: 'Browser menu' }).click()
   await page.getByRole('button', { name: 'Show top toolbar' }).click()
   await page.locator('.toolbar-top').waitFor()
@@ -680,20 +682,33 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   assert.equal((await getState(page)).bookmarks.length, 1)
   const arcExport = join(profile, 'arc-data-export.md')
   await writeFile(arcExport, '# Arc Data Export\n## Space: Studio\nColor: #864fb0\n### Favorites\n- [Studio mail](https://example.org/mail)\n### Pinned Tabs\n- [Studio desk](https://example.org/desk)\n## Space: Training\n### Today\n- [Course](https://example.org/course)')
-  await app.evaluate(({ dialog }, path) => {
+  const studioCsv = join(profile, 'studio.csv')
+  await writeFile(studioCsv, 'url,username,password\nhttps://example.org,studio,synthetic-studio-pass\n')
+  await app.evaluate(({ dialog, safeStorage }, { path, studioCsv }) => {
     const original = dialog.showOpenDialog
-    dialog.showOpenDialog = async () => {
-      dialog.showOpenDialog = original
+    dialog.showOpenDialog = async (_window, options) => {
+      if (options.title?.endsWith('Studio')) return { canceled: false, filePaths: [studioCsv] }
+      if (options.title?.endsWith('Training')) {
+        dialog.showOpenDialog = original
+        return { canceled: true, filePaths: [] }
+      }
       return { canceled: false, filePaths: [path] }
     }
-  }, arcExport)
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async () => Buffer.from('encrypted-studio-fixture')
+  }, { path: arcExport, studioCsv })
+  await page.getByRole('checkbox', { name: /Include password CSVs/ }).check()
   await page.getByRole('button', { name: 'Import Profiles or Spaces' }).click()
-  await page.getByText(/Profiles imported: Studio, Training.*1 Favorite.*1 pinned tab.*1 open tab/).waitFor()
+  await page.getByText(/Profiles imported: Studio, Training.*1 password.*1 Favorite.*1 pinned tab.*1 open tab.*skipped for Training/).waitFor()
   const migrated = await getState(page)
   const studio = migrated.workspaces.find(space => space.name === 'Studio')
   assert.equal(studio.accent, '#864fb0')
   assert.ok(migrated.sidebarPreviews[studio.id].tabs.some(tab => tab.title === 'Studio desk' && tab.pinned === 1))
   assert.ok(migrated.sidebarPreviews[studio.id].favorites.some(favorite => favorite.title === 'Studio mail'))
+  const importedLogins = new DatabaseSync(join(profile, 'lexn.sqlite'), { readOnly: true })
+  try {
+    assert.deepEqual(importedLogins.prepare('SELECT profileId, username FROM saved_logins').all().map(row => [row.profileId, row.username]), [[studio.id, 'studio']])
+  } finally { importedLogins.close() }
   assert.equal(await page.getByLabel('Password destination Profile').inputValue(), '')
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   const layouts = page.getByRole('group', { name: 'Navigation layout' })
@@ -831,6 +846,100 @@ test('password imports keep each account in its Profile and reject reassigned en
     assert.equal(state.passwords.length, 2)
     assert.notEqual(state.passwords[0].id, alice.id)
   } finally { db.close() }
+})
+
+test('saved logins fill eligible HTTPS forms on demand and websites have contextual menus', {
+  skip: process.platform !== 'darwin', timeout: 60000,
+}, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'drew-autofill-'))
+  const key = join(dir, 'test-key.pem')
+  const cert = join(dir, 'test-cert.pem')
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' })
+  const server = createSecureServer({ key: await readFile(key), cert: await readFile(cert) }, (request, response) => {
+    const action = request.url === '/cross-origin' ? 'https://example.invalid/signin' : '/signin'
+    response.setHeader('Content-Type', 'text/html')
+    response.end(`<!doctype html><title>Drew Autofill Fixture</title><h1>Sign in</h1>
+      <a id="fixture-link" href="/linked">Fixture Link</a>
+      <form action="${action}" method="post"><input id="user" name="username" autocomplete="username">
+      <input id="pass" name="password" type="password" autocomplete="current-password"><button>Sign in</button></form>`)
+  })
+  await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
+  const origin = 'https://127.0.0.1:' + server.address().port
+  let app
+  t.after(async () => {
+    await app?.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(dir, { recursive: true, force: true })
+  })
+  app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: dir } })
+  const page = await shellPage(app)
+  await page.getByRole('button', { name: 'Open Drew' }).click()
+  await app.evaluate(({ session, safeStorage, Menu }) => {
+    session.fromPartition('persist:lexn-web').setCertificateVerifyProc((request, callback) =>
+      callback(request.hostname === '127.0.0.1' ? 0 : -3))
+    const vault = new Map()
+    safeStorage.isAsyncEncryptionAvailable = async () => true
+    safeStorage.encryptStringAsync = async secret => {
+      const key = 'fixture-vault-key-' + vault.size
+      vault.set(key, secret)
+      return Buffer.from(key)
+    }
+    safeStorage.decryptStringAsync = async buffer => ({ result: vault.get(buffer.toString()), shouldReEncrypt: false })
+    Menu.prototype.popup = function (options) {
+      globalThis.drewMenuLabels = this.items.map(item => item.label)
+      if (globalThis.drewChooseLogin) this.items.find(item => item.label === 'Fill alice')?.click()
+      options?.callback?.()
+    }
+  })
+  await page.evaluate(async address => {
+    await window.lexn.command('saveLogin', address, 'alice', 'fixture-only-password')
+    await window.lexn.command('newTab', address + '/signin')
+  }, origin)
+  await waitUntil(async () => (await active(page)).title === 'Drew Autofill Fixture' && await activeView(app) === origin + '/signin',
+    'the HTTPS login fixture did not open')
+  const inspect = expression => app.evaluate(({ BrowserWindow }, { origin, expression }) => {
+    const win = BrowserWindow.getAllWindows()[0]
+    const view = win.contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith(origin))
+    return view.webContents.executeJavaScript(expression)
+  }, { origin, expression })
+  const values = () => inspect("[document.querySelector('#user').value, document.querySelector('#pass').value, typeof window.lexn]")
+  assert.deepEqual(await values(), ['', '', 'undefined'])
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus())
+  await page.evaluate(() => window.lexn.command('fillLogin'))
+  assert.deepEqual(await values(), ['alice', 'fixture-only-password', 'undefined'])
+
+  const click = (selector, button, choose = false) => app.evaluate(async ({ BrowserWindow }, { origin, selector, button, choose }) => {
+    globalThis.drewChooseLogin = choose
+    globalThis.drewMenuLabels = []
+    const win = BrowserWindow.getAllWindows()[0]
+    const view = win.contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith(origin))
+    const contents = view.webContents
+    const [x, y] = await contents.executeJavaScript(
+      '(() => { const r = document.querySelector(' + JSON.stringify(selector) + ').getBoundingClientRect(); return [Math.round(r.x + r.width / 2), Math.round(r.y + r.height / 2)] })()')
+    win.focus()
+    contents.focus()
+    for (const type of ['mouseDown', 'mouseUp']) contents.sendInputEvent({ type, button, clickCount: 1, x, y })
+  }, { origin, selector, button, choose })
+  const menu = () => app.evaluate(() => globalThis.drewMenuLabels)
+  await click('#fixture-link', 'right')
+  await waitUntil(async () => (await menu()).includes('Open Link in New Window'), 'link context menu was not shown')
+  assert.ok((await menu()).includes('Copy Link Address'))
+  assert.ok((await menu()).includes('Save Link'))
+  await click('h1', 'right')
+  await waitUntil(async () => (await menu()).includes('Print…'), 'page context menu was not shown')
+  assert.ok((await menu()).includes('Back'))
+  await click('#user', 'right')
+  await waitUntil(async () => (await menu()).includes('Paste'), 'field context menu did not contain editing controls')
+  await inspect("document.querySelector('#pass').value = ''; document.querySelector('#user').value = ''")
+  await click('#pass', 'left', true)
+  await waitUntil(async () => (await values())[1] === 'fixture-only-password', 'selecting a saved login did not autofill the password field')
+
+  const tab = await active(page)
+  await page.evaluate(({ id, origin }) => window.lexn.command('navigate', id, origin + '/cross-origin'), { id: tab.id, origin })
+  await waitUntil(async () => await activeView(app) === origin + '/cross-origin' && (await active(page)).loading === false, 'unsafe form fixture did not load')
+  await assert.rejects(page.evaluate(() => window.lexn.command('fillLogin')), /sign-in form/)
+  assert.deepEqual(await values(), ['', '', 'undefined'])
 })
 
 test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LEXN_TEST_PUBLIC_WEB, timeout: 90000 }, async t => {
