@@ -99,3 +99,37 @@ test('v1 shared data migrates to the first profile without changing the active p
     db.close()
   }
 })
+
+test('the active Space’s Profile supplies a shared sidebar pin and width on upgrade', t => {
+  const dir = mkdtempSync(join(tmpdir(), 'drew-sidebar-'))
+  t.after(() => rmSync(dir, { recursive: true, force: true }))
+  const path = join(dir, 'sidebar.sqlite')
+  const legacy = new Database(path)
+  const personal = legacy.primaryProfile()
+  const work = legacy.one("SELECT id FROM workspaces WHERE name = 'Work'").id
+  legacy.setProfileSetting(personal, 'keepSidebarOpen', false)
+  legacy.setProfileSetting(personal, 'sidebarWidth', '292')
+  legacy.setProfileSetting(work, 'keepSidebarOpen', true)
+  legacy.setProfileSetting(work, 'sidebarWidth', '334')
+  legacy.setProfileSetting(work, 'theme', 'slate')
+  legacy.addWorkspace('work-space', 'Project', '#abc123', work, '')
+  legacy.set('workspaceId', 'work-space')
+  legacy.run('PRAGMA user_version = 5')
+  legacy.close()
+
+  const upgraded = new Database(path)
+  try {
+    for (const profile of [personal, work]) {
+      assert.equal(upgraded.settings(profile).keepSidebarOpen, true)
+      assert.equal(upgraded.settings(profile).sidebarWidth, '334')
+    }
+    assert.equal(upgraded.settings(work).theme, 'slate')
+    assert.equal(upgraded.settings(personal).theme, 'dark')
+    upgraded.set('keepSidebarOpen', false)
+    upgraded.set('sidebarWidth', '300')
+    assert.equal(upgraded.settings(work).keepSidebarOpen, false)
+    assert.equal(upgraded.settings(personal).sidebarWidth, '300')
+  } finally {
+    upgraded.close()
+  }
+})

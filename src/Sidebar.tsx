@@ -1,22 +1,26 @@
 import { useState, type ReactNode } from 'react'
-import { ChevronDown, Folder, PanelLeftClose, Pause, Play, Plus, Volume2, VolumeX, X } from 'lucide-react'
+import { ChevronDown, Folder, Pause, Pin, Play, Plus, Volume2, VolumeX, X } from 'lucide-react'
 import type { BrowserState, Favorite, Tab, TabGroup, Workspace } from '../shared/model'
+import { effectiveShortcuts, shortcutLabel } from '../shared/shortcuts'
 import { command, type Page } from './state'
+import { ServiceRail } from './ServiceRail'
 import { Favorites } from './Favorites'
 import { Favicon, Tool } from './ui'
 
-export function Sidebar({ browser, space, active, page, collapsed, locked, toggle, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, direction }: {
+export function Sidebar({ browser, space, active, page, collapsed, locked, pinPending, pinSidebar, open, select, newTab, workspaceEditor, groupEditor, context, resize, switchProfile, chrome, dragTab, openFavorite, favoriteMenu, editFavorite }: {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
-  toggle: () => void; select: (id: string) => void; newTab: () => void
+  pinPending: boolean; pinSidebar: () => void; open: (page: Page) => void; select: (id: string) => void; newTab: () => void
   workspaceEditor: (space?: Workspace, sameProfile?: boolean) => void; groupEditor: (parent?: string) => void;
   switchProfile: (id: string, direction?: number) => void; chrome: ReactNode;
   context: (event: React.MouseEvent, tab: Tab) => void; resize: (event: React.PointerEvent<HTMLDivElement>) => void
   dragTab: (id: string | null) => void; openFavorite: (id: string) => void;
-  favoriteMenu: (event: React.MouseEvent, favorite: Favorite) => void; editFavorite: (favorite?: Favorite) => void; direction: number
+  favoriteMenu: (event: React.MouseEvent, favorite: Favorite) => void; editFavorite: (favorite?: Favorite) => void
 }) {
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
   const [creating, setCreating] = useState(false)
+  const platform = window.lexn.platform
+  const newTabShortcut = shortcutLabel(effectiveShortcuts(browser.settings.keyboardShortcuts, platform).command, platform)
   const tabs = browser.tabs.filter(tab => tab.workspaceId === space.id)
   const groups = browser.groups.filter(group => group.workspaceId === space.id)
   const renderTab = (tab: Tab) => <div key={tab.id} className={'tab-row' + (tab.id === active?.id && !page ? ' selected' : '') + (dragging === tab.id ? ' dragging' : '')}
@@ -59,12 +63,14 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, toggl
   </div>
 
   return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '')} inert={collapsed}>
-    <div className="window-strip" />
     <header className="spatial-header">
-      <Tool label={locked ? "Sidebar is locked open" : "Collapse sidebar"} disabled={locked} className="sidebar-toggle" onClick={toggle}><PanelLeftClose size={18} /></Tool>
+      <button type="button" className="icon-button sidebar-toggle sidebar-pin" aria-label="Keep sidebar expanded"
+        title={locked ? 'Unpin sidebar' : 'Keep sidebar expanded'} aria-pressed={locked} disabled={pinPending} onClick={pinSidebar}>
+        <Pin size={17} />
+      </button>
       {chrome}
     </header>
-    <div className={'tabs-scroll spatial-scroll swipe-' + (direction < 0 ? 'right' : 'left')} key={space.id}>
+    <div className="tabs-scroll spatial-scroll" key={space.id}>
       <Favorites items={browser.favorites} size={browser.settings.favoriteSize} activeUrl={active?.url}
         open={openFavorite} edit={editFavorite} menu={favoriteMenu} />
       <section className="tab-tier" aria-label="Pinned tabs">
@@ -75,11 +81,12 @@ export function Sidebar({ browser, space, active, page, collapsed, locked, toggl
       <section className="tab-tier today-tier" aria-label="Today">
         <div className="side-label">Today<button type="button" className="clear-tabs" onClick={() => { void command('archiveTabs') }}
           disabled={!tabs.some(tab => !tab.pinned && tab.url !== 'about:blank')}>Clear</button></div>
-        <button type="button" className="new-tab" onClick={newTab} title="New tab"><Plus size={17} /><span>New Tab</span><kbd>{window.lexn.platform === 'darwin' ? '⌘' : 'Ctrl'} T</kbd></button>
+        <button type="button" className="new-tab" onClick={newTab} title="New tab"><Plus size={17} /><span>New Tab</span><kbd>{newTabShortcut}</kbd></button>
         {tabs.filter(tab => !tab.pinned).map(renderTab)}
       </section>
     </div>
     <footer className="spatial-footer">
+      <ServiceRail page={page} open={open} />
       <div className="space-strip">
         <button type="button" className="space-name" title="Edit Space" aria-label="Edit Space" onClick={() => workspaceEditor(space)}>{space.icon || space.name}</button>
         <nav className="profile-dots" aria-label="Browser profiles">

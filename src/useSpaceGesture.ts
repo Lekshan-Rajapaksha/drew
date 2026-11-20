@@ -1,34 +1,69 @@
-import { useRef } from 'react'
-import type { Workspace } from '../shared/model'
+import { useEffect, useRef } from 'react'
+import type { SpaceScroll, Workspace } from '../shared/model'
 
-const wheelQuietTime = 270
-
-export function useSpaceGesture(spaces: Workspace[], active: string, select: (id: string, direction?: number) => void) {
+export function useSpaceGesture(
+  spaces: Workspace[], active: string, select: (id: string, direction?: number) => void, sidebarLimit: number,
+) {
   const wheel = useRef({ distance: 0, last: -Infinity, consumed: false })
+  const native = useRef({ available: false, distance: 0, consumed: false })
+  const route = useRef({ actual: active, queued: [] as string[] })
   const touch = useRef<{ x: number; y: number } | null>(null)
-  const overSidebar = (target: EventTarget) => target instanceof Element && Boolean(target.closest('.spatial-sidebar, .service-rail'))
+  const overSidebar = (target: EventTarget) => Boolean((target as Element).closest?.('.spatial-sidebar'))
   const advance = (direction: number) => {
-    const index = spaces.findIndex(space => space.id === active)
+    const prediction = route.current
+    if (prediction.actual !== active) {
+      const confirmed = prediction.queued.indexOf(active)
+      prediction.queued = confirmed === -1 ? [] : prediction.queued.slice(confirmed + 1)
+      prediction.actual = active
+    }
+    const current = prediction.queued.at(-1) ?? active
+    const index = spaces.findIndex(space => space.id === current)
     if (index < 0 || spaces.length < 2) return
-    select(spaces[(index + direction + spaces.length) % spaces.length].id, direction)
+    const next = spaces[(index + direction + spaces.length) % spaces.length].id
+    prediction.queued.push(next)
+    select(next, direction)
   }
-  return {
-    onWheel: (event: React.WheelEvent) => {
-      const now = performance.now()
-      const gesture = wheel.current
-      if (now - gesture.last >= wheelQuietTime) {
+  const receive = useRef<(event: SpaceScroll) => void>(() => {})
+  useEffect(() => {
+    receive.current = event => {
+      if (event.momentum) return
+      const gesture = native.current
+      if (event.phase === 'begin' || event.phase === 'end') {
         gesture.distance = 0
         gesture.consumed = false
       }
-      // Momentum can continue past a fixed cooldown and cross between chrome surfaces.
-      // Every event in the burst extends the latch until the trackpad is quiet.
-      gesture.last = now
-      if (gesture.consumed || event.ctrlKey || !overSidebar(event.target)) return
+      if (event.phase === 'end' || event.x < 0 || event.x >= sidebarLimit || Math.abs(event.dx) <= Math.abs(event.dy)) return
+      if (event.phase === 'discrete') { advance(Math.sign(event.dx)); return }
+      if (gesture.consumed) return
+      gesture.distance += event.dx
+      if (Math.abs(gesture.distance) >= 45) {
+        gesture.consumed = true
+        advance(Math.sign(gesture.distance))
+      }
+    }
+  })
+  useEffect(() => {
+    void window.lexn.usesNativeSpaceScroll().then(available => { native.current.available = available }).catch(() => {})
+    return window.lexn.onSpaceScroll(event => receive.current(event))
+  }, [])
+  return {
+    onWheel: (event: React.WheelEvent) => {
+      if (native.current.available && event.nativeEvent.isTrusted) return
+      if (event.ctrlKey || !overSidebar(event.target)) return
       const dx = event.shiftKey && !event.deltaX ? event.deltaY : event.deltaX
-      if (Math.abs(dx) <= Math.abs(event.shiftKey ? 0 : event.deltaY)) return
+      const horizontal = Math.abs(dx) > Math.abs(event.shiftKey ? 0 : event.deltaY)
+      if (horizontal && event.deltaMode !== 0) { advance(Math.sign(dx)); return }
+      const now = performance.now()
+      const gesture = wheel.current
+      if (now - gesture.last >= 175 || (horizontal && gesture.consumed && Math.sign(dx) !== Math.sign(gesture.distance))) {
+        gesture.distance = 0
+        gesture.consumed = false
+      }
+      gesture.last = now
+      if (gesture.consumed || !horizontal) return
       if (Math.sign(gesture.distance) !== Math.sign(dx)) gesture.distance = 0
-      gesture.distance += dx * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? 200 : 1)
-      if (Math.abs(gesture.distance) < 64) return
+      gesture.distance += dx
+      if (Math.abs(gesture.distance) < 52) return
       gesture.consumed = true
       advance(Math.sign(gesture.distance))
     },

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { BrowserWindow, Menu, WebContentsView, type Rectangle, type Session } from 'electron'
+import { BrowserWindow, Menu, View, WebContentsView, type Rectangle, type Session } from 'electron'
 import { HOME, type PaneRect, type SavedTab, type Tab, type Workspace } from '../../shared/model.js'
 import { webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
@@ -15,9 +15,8 @@ export class Tabs {
   private tabs = new Map<string, LiveTab>()
   private closed: SavedTab[] = []
   private attached = new Set<WebContentsView>()
+  private viewport = new View()
   private bounds: Rectangle | PaneRect[] | null = null
-  private spaceSlide: { start: number; direction: number } | null = null
-  private slideTimer: ReturnType<typeof setTimeout> | null = null
   private shuttingDown = false
   workspaceId: string
 
@@ -27,8 +26,11 @@ export class Tabs {
     private sessionFor: (profile: string) => Session,
     private changed: () => void,
     private wire: (view: WebContentsView) => void,
+    attachViewport: (view: View) => void,
     private wirePeek?: (url: string, space: string) => void,
   ) {
+    this.viewport.setVisible(false)
+    attachViewport(this.viewport)
     const spaces = this.workspaces()
     this.workspaceId = spaces.find(space => space.id === db.get('workspaceId', ''))?.id ?? spaces[0].id
     for (const tab of db.all<SavedTab>('SELECT * FROM tabs ORDER BY position, rowid')) this.register(tab)
@@ -129,7 +131,9 @@ export class Tabs {
     })
     wc.on('page-favicon-updated', (_event, urls) => {
       if (state.url === HOME || state.error) return
-      state.favicon = urls.map(url => webUrl(url)).find(Boolean) ?? null
+      state.favicon = urls.map(url => webUrl(url) ?? (
+        url.length <= 96_000 && /^data:image\/(?:png|gif|jpeg|webp|x-icon|vnd\.microsoft\.icon);base64,[a-z0-9+/=]+$/i.test(url) ? url : null
+      )).find(Boolean) ?? null
       this.persist(state)
       update()
     })
@@ -215,12 +219,11 @@ export class Tabs {
     this.changed()
   }
 
-  switchWorkspace(id: string, direction = 0) {
+  switchWorkspace(id: string) {
     const space = this.workspaces().find(item => item.id === id)
     if (!space) return
     if (id !== this.workspaceId) {
       if (Array.isArray(this.bounds)) this.bounds = null
-      this.spaceSlide = direction ? { start: performance.now(), direction } : null
     }
     this.workspaceId = id
     this.db.set('workspaceId', id)
@@ -416,22 +419,23 @@ export class Tabs {
       if (!tab.started) this.start(tab)
       if (tab.view) next.set(tab.view, { x: slot.x, y: slot.y, width: slot.width, height: slot.height })
     }
-    for (const view of this.attached) if (!next.has(view)) this.window.contentView.removeChildView(view)
-    const slide = this.spaceSlide
-    let offset = 0
-    if (slide && !Array.isArray(bounds)) {
-      const progress = Math.min(1, (performance.now() - slide.start) / 360)
-      offset = Math.round(33 * (1 - progress) ** 3) * slide.direction
-      if (progress >= 1) this.spaceSlide = null
-      else if (!this.slideTimer) this.slideTimer = setTimeout(() => {
-        this.slideTimer = null
-        this.syncView()
-      }, 16)
+
+    const clip = Array.isArray(bounds) && bounds.length ? {
+      x: Math.min(...bounds.map(rect => rect.x)),
+      y: Math.min(...bounds.map(rect => rect.y)),
+      width: 0,
+      height: 0,
+    } : Array.isArray(bounds) ? null : bounds
+    if (clip && Array.isArray(bounds)) {
+      clip.width = Math.max(...bounds.map(rect => rect.x + rect.width)) - clip.x
+      clip.height = Math.max(...bounds.map(rect => rect.y + rect.height)) - clip.y
     }
+    this.viewport.setVisible(Boolean(clip && next.size))
+    if (clip) this.viewport.setBounds(clip)
+    for (const view of this.attached) if (!next.has(view)) this.viewport.removeChildView(view)
     for (const [view, rect] of next) {
-      if (!this.attached.has(view)) this.window.contentView.addChildView(view)
-      const inset = Math.min(Math.abs(offset), Math.max(0, rect.width - 1))
-      view.setBounds({ ...rect, x: rect.x + (offset > 0 ? inset : 0), width: rect.width - inset })
+      if (!this.attached.has(view)) this.viewport.addChildView(view)
+      if (clip) view.setBounds({ ...rect, x: rect.x - clip.x, y: rect.y - clip.y })
     }
     this.attached = new Set(next.keys())
   }
@@ -441,7 +445,7 @@ export class Tabs {
     if (!view) return
     tab.view = null
     if (this.attached.has(view)) {
-      if (!this.window.isDestroyed()) this.window.contentView.removeChildView(view)
+      if (!this.window.isDestroyed()) this.viewport.removeChildView(view)
       this.attached.delete(view)
     }
     view.webContents.removeAllListeners()
@@ -450,7 +454,7 @@ export class Tabs {
 
   dispose() {
     this.shuttingDown = true
-    if (this.slideTimer) clearTimeout(this.slideTimer)
     for (const tab of this.tabs.values()) this.destroyView(tab)
+    if (!this.window.isDestroyed()) this.window.contentView.removeChildView(this.viewport)
   }
 }

@@ -39,7 +39,7 @@ async function go(page, url) {
 async function activeView(app) {
   return app.evaluate(({ BrowserWindow }) => {
     const win = BrowserWindow.getAllWindows()[0]
-    const view = win.contentView.children.find(child => child.webContents && child.webContents !== win.webContents)
+    const view = win.contentView.children.flatMap(child => child.children).at(-1)
     return view?.webContents.getURL() ?? null
   })
 }
@@ -47,7 +47,7 @@ async function activeView(app) {
 async function shortcut(app, keyCode, modifiers) {
   await app.evaluate(({ BrowserWindow }, { keyCode, modifiers }) => {
     const win = BrowserWindow.getAllWindows()[0]
-    const active = win.contentView.children.find(child => child.webContents && child.webContents !== win.webContents)
+    const active = win.contentView.children.flatMap(child => child.children).at(-1)
     const contents = active?.webContents ?? win.webContents
     win.focus()
     contents.focus()
@@ -76,7 +76,10 @@ function serve(request, response) {
       const timer = setInterval(() => response.write(Buffer.alloc(1024)), 30)
       response.on('close', () => clearInterval(timer))
       break
-    case '/favicon.ico': response.writeHead(404).end(); break
+    case '/favicon.ico':
+      response.writeHead(200, { 'Content-Type': 'image/png' })
+      response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/r1cAAAAASUVORK5CYII=', 'base64'))
+      break
     default: {
       const title = request.url === '/two' ? 'LexN Fixture Two' : 'LexN Fixture One'
       response.setHeader('Content-Type', 'text/html')
@@ -102,18 +105,41 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
     await new Promise(resolve => server.close(resolve))
     await rm(profile, { recursive: true, force: true })
   })
-  const launch = async () => {
+  const launch = async (initialize = false) => {
     app = await electron.launch({ args: ['.'], executablePath, env, timeout: 30000 })
     const page = await shellPage(app)
     await page.locator('.spatial-browser').waitFor()
     await pointAt(app, 850)
-    await shortcut(app, 'S', [process.platform === 'darwin' ? 'meta' : 'control'])
+    if (initialize) {
+      await page.evaluate(() => window.lexn.command('setSetting', 'keepSidebarOpen', true))
+    }
     await page.getByRole('combobox', { name: 'Address and search' }).waitFor()
     return page
   }
-  let page = await launch()
-  await page.getByRole('textbox', { name: 'Search the web' }).waitFor()
-  if (process.env.LEXN_SCREENSHOT) await page.screenshot({ path: process.env.LEXN_SCREENSHOT })
+  let page = await launch(true)
+  const homeSearch = page.getByRole('combobox', { name: 'Search the web' })
+  await page.getByRole('heading', { name: 'Drew' }).waitFor()
+  await homeSearch.waitFor()
+  assert.ok(await page.locator('.home-clock').textContent())
+  assert.equal(await page.locator('.quick-links').count(), 0)
+  assert.equal((await page.locator('.home').boundingBox()).y, 0)
+  if (process.platform === 'darwin') assert.deepEqual(await app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows()[0].getWindowButtonPosition()), { x: 15, y: 11 })
+  await page.getByRole('button', { name: 'Customize' }).click()
+  await page.getByRole('combobox', { name: 'New tab background' }).waitFor()
+  const settingsSections = page.getByRole('navigation', { name: 'Settings sections' })
+  await settingsSections.getByRole('button', { name: 'Keyboard Shortcuts' }).click()
+  await page.getByRole('combobox', { name: 'Shortcut key' }).selectOption('K')
+  await page.getByRole('button', { name: 'Save shortcut' }).click()
+  await page.getByRole('status').filter({ hasText: 'Shortcut saved' }).waitFor()
+  await shortcut(app, 'K', [process.platform === 'darwin' ? 'meta' : 'control'])
+  const remappedBar = page.getByRole('dialog', { name: 'Command Bar' })
+  await remappedBar.waitFor()
+  await remappedBar.getByRole('combobox').press('Escape')
+  await page.getByRole('button', { name: 'Restore default' }).click()
+  await page.getByRole('status').filter({ hasText: 'Default shortcut restored' }).waitFor()
+  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.send('lexn:shortcut', 'browse'))
+  if (process.env.LEXN_SCREENSHOT) await page.screenshot({ path: process.env.LEXN_SCREENSHOT, animations: 'disabled' })
   await app.evaluate(({ session }, fixture) => {
     session.fromPartition('persist:lexn-web').webRequest.onBeforeRequest(
       { urls: ['https://www.google.com/search*'] },
@@ -123,13 +149,19 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
       },
     )
   }, origin + '/one')
-  await go(page, 'local Chromium search')
+  await homeSearch.fill('local Chromium search')
+  await homeSearch.press('Enter')
   const one = await waitUntil(async () => {
     const tab = await active(page)
     return tab.title === 'LexN Fixture One' && tab
   }, 'first page title did not update')
   assert.equal(await activeView(app), origin + '/one')
   assert.equal(await page.locator('.toolbar-top').count(), 0)
+  await page.locator('.address-site-icon img').waitFor()
+  await waitUntil(async () => page.locator('.address-site-icon img').evaluate(img => img.complete && img.naturalWidth > 0), 'website favicon did not load')
+  await page.getByRole('button', { name: 'Add page to Favorites' }).click()
+  await page.getByRole('button', { name: 'Edit page favorite' }).waitFor()
+  assert.equal(await page.locator('.spatial-footer').getByRole('navigation', { name: 'Browser services' }).count(), 1)
   await page.getByRole('button', { name: 'Browser menu' }).click()
   await page.getByRole('button', { name: 'Show top toolbar' }).click()
   await page.locator('.toolbar-top').waitFor()
@@ -140,33 +172,80 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('dialog', { name: 'Command Bar' }).waitFor()
   await page.getByRole('dialog').getByRole('combobox').press('Escape')
   await page.getByRole('dialog', { name: 'Command Bar' }).waitFor({ state: 'detached' })
-  await page.getByRole('button', { name: 'Collapse sidebar' }).click()
-  await page.locator('.spatial-browser.spatial-collapsed').waitFor()
-  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor({ state: 'hidden' })
-  if (process.platform === 'darwin') await waitUntil(async () => await app.evaluate(({ BrowserWindow }) => {
+  const pin = page.getByRole('button', { name: 'Keep sidebar expanded' })
+  const geometry = () => app.evaluate(({ BrowserWindow }) => {
     const root = BrowserWindow.getAllWindows()[0]
-    const view = root.contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
-    const rect = view?.getBounds()
-    const [width, height] = root.getContentSize()
-    return rect && rect.x === 0 && rect.y === 0 && rect.width === width && rect.height === height
-  }), 'web content did not extend to every window edge')
+    const website = root.contentView.children.find(child => child.children.some(view => view.webContents?.getURL().startsWith('http:')))
+    const sidebar = root.contentView.children.find(child => child.webContents?.getURL() === 'about:blank')
+    return {
+      website: website?.getBounds(),
+      sidebar: sidebar?.getVisible() ? sidebar.getBounds() : null,
+      width: root.getContentSize()[0],
+      height: root.getContentSize()[1],
+    }
+  })
+  await pin.click()
+  await page.locator('.spatial-browser.spatial-collapsed').waitFor()
+  const unpinned = await waitUntil(async () => {
+    const geometryNow = await geometry()
+    return geometryNow.website?.x === 0 && geometryNow.website.y === 0 &&
+      geometryNow.website.width === geometryNow.width && geometryNow.website.height === geometryNow.height && geometryNow
+  }, 'an unpinned page did not fill its viewport')
   await pointAt(app, 3)
-  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor()
+  const floating = await waitUntil(async () => {
+    const native = await geometry()
+    return native.sidebar?.x === 8 && native
+  }, 'sidebar did not slide over the web page')
+  assert.deepEqual(floating.website, unpinned.website)
+  assert.equal(floating.sidebar.y, 0)
+  assert.equal(floating.sidebar.width, 268)
+  assert.equal(floating.sidebar.height, floating.height)
   await pointAt(app, 850)
-  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor({ state: 'hidden' })
+  await waitUntil(async () => !(await geometry()).sidebar, 'sidebar did not hide on pointer exit')
+  assert.deepEqual((await geometry()).website, unpinned.website)
+
+  await shortcut(app, 'S', [toggleModifier])
+  await waitUntil(async () => (await geometry()).sidebar?.x === 8, 'sidebar shortcut did not open the overlay')
+  assert.deepEqual((await geometry()).website, unpinned.website)
+  await shortcut(app, 'S', [toggleModifier])
+  await waitUntil(async () => !(await geometry()).sidebar, 'sidebar shortcut did not close the overlay')
+
   await pointAt(app, 3)
-  await page.getByRole('navigation', { name: 'Browser profiles' }).waitFor()
+  const sidebarPage = await waitUntil(async () => {
+    for (const candidate of app.context().pages()) {
+      if (candidate.url() === 'about:blank' && await candidate.locator('.floating-sidebar').count()) return candidate
+    }
+  }, 'floating sidebar renderer did not open')
+  const floatingPin = sidebarPage.getByRole('button', { name: 'Keep sidebar expanded' })
+  assert.equal(await sidebarPage.locator('.spatial-sidebar').evaluate(card => getComputedStyle(card).borderRadius), '18px')
+  await floatingPin.click()
+  await waitUntil(async () => (await getState(page)).settings.keepSidebarOpen, 'sidebar pin was not saved')
+  await waitUntil(async () => {
+    const native = await geometry()
+    return native.sidebar === null && native.website?.x === 284 && native.website.width === native.width - 284
+  }, 'pinning the sidebar did not resize the page')
+  const pinnedCard = page.locator('.spatial-sidebar')
+  assert.equal((await pinnedCard.boundingBox()).x, 8)
+  assert.equal((await pinnedCard.boundingBox()).y, 0)
+  assert.equal((await pinnedCard.boundingBox()).height, floating.height)
+  assert.equal(await pinnedCard.evaluate(card => getComputedStyle(card).borderRadius), '18px')
+  const grip = await page.getByRole('separator', { name: 'Sidebar width' }).boundingBox()
+  await page.mouse.move(grip.x + 1, grip.y + 180)
+  await page.mouse.down()
+  await page.mouse.move(grip.x + 37, grip.y + 180, { steps: 4 })
+  await page.mouse.up()
+  await waitUntil(async () => (await getState(page)).settings.sidebarWidth === '320', 'sidebar width was not saved')
+  await waitUntil(async () => (await geometry()).website?.x === 320, 'the pinned sidebar did not reserve its resized width')
   const services = page.getByRole('navigation', { name: 'Browser services' })
-  await services.getByRole('button', { name: 'Bookmarks' }).waitFor()
   await services.getByRole('button', { name: 'Settings' }).click()
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
-  await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).check()
-  await page.getByRole('button', { name: 'Sidebar is locked open' }).waitFor()
+  const keepOpen = page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' })
+  await keepOpen.uncheck()
+  await keepOpen.check()
+  await waitUntil(async () => await pin.getAttribute('aria-pressed') === 'true', 'sidebar pin did not reflect Settings')
   await pointAt(app, 850)
   await shortcut(app, 'S', [toggleModifier])
   assert.equal(await page.locator('.spatial-collapsed').count(), 0)
-  await page.getByRole('checkbox', { name: 'Keep tab sidebar expanded' }).uncheck()
-  await shortcut(app, 'S', [toggleModifier])
   await page.locator(`[data-tab-id="${one.id}"]`).click()
   await waitUntil(async () => await activeView(app) === origin + '/one', 'website did not reattach after changing chrome')
 
@@ -201,7 +280,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.locator(`[data-tab-id="${one.id}"]`).click({ button: 'right' })
   await page.getByRole('button', { name: 'Add to Split View' }).click()
   await waitUntil(async () => await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].contentView.children.filter(child => child.webContents?.getURL().startsWith('http:')).length) === 2,
+    BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).filter(child => child.webContents?.getURL().startsWith('http:')).length) === 2,
     'two native browsing panes were not attached')
   await page.getByRole('button', { name: 'Remove LexN Fixture Two from split' }).last().click()
   await page.locator('.split-view').waitFor({ state: 'detached' })
@@ -241,7 +320,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('button', { name: 'Close assistant' }).click()
 
   await app.evaluate(({ BrowserWindow }) => {
-    const view = BrowserWindow.getAllWindows()[0].contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
+    const view = BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith('http:'))
     return view.webContents.executeJavaScript('document.getElementById("download").click()', true)
   })
   await page.getByRole('button', { name: 'Downloads', exact: true }).click()
@@ -251,7 +330,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
 
   await page.locator(`[data-tab-id="${one.id}"]`).click()
   await app.evaluate(({ BrowserWindow }) => {
-    const view = BrowserWindow.getAllWindows()[0].contentView.children.find(child => child.webContents?.getURL().startsWith('http:'))
+    const view = BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith('http:'))
     return view.webContents.executeJavaScript('document.getElementById("slow").click()', true)
   })
   await page.getByRole('button', { name: 'Downloads', exact: true }).click()
@@ -267,7 +346,19 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   await page.getByRole('combobox', { name: 'Theme', exact: true }).selectOption('light')
   await page.locator('.browser.light').waitFor()
-  await page.evaluate(() => window.lexn.command('setPermission', 'https://example.com', 'notifications', 'allow'))
+  assert.equal(await page.locator('.viewport').evaluate(viewport => getComputedStyle(viewport).backgroundColor), 'rgb(255, 255, 255)')
+  await settingsSections.getByRole('button', { name: 'Notifications' }).click()
+  await page.getByLabel('Notification website').fill('https://example.com')
+  await page.getByRole('button', { name: 'Save notification rule' }).click()
+  const siteRule = page.getByLabel('Notification permission for https://example.com')
+  await siteRule.waitFor()
+  await siteRule.selectOption('block')
+  await waitUntil(async () => (await getState(page)).permissions.some(rule => rule.permission === 'notifications' && !rule.allow),
+    'website notification denial was not saved')
+  await siteRule.selectOption('allow')
+  await page.getByRole('combobox', { name: 'Website notifications' }).selectOption('block')
+  await waitUntil(async () => (await getState(page)).settings.notificationPolicy === 'block', 'global notification block was not saved')
+  await page.getByRole('combobox', { name: 'Website notifications' }).selectOption('approved')
   const extensionPath = join(profile, 'fixture-extension')
   await mkdir(extensionPath)
   await writeFile(join(extensionPath, 'manifest.json'), JSON.stringify({
@@ -305,7 +396,10 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await tile.waitFor()
   await tile.dragTo(favorites.getByRole('button', { name: 'Google' }))
   await waitUntil(async () => (await getState(page)).favorites[0].title === 'Fixture Favorite', 'favorite did not move')
-  await favorites.getByRole('combobox', { name: 'Favorite icon size' }).selectOption('small')
+  assert.equal(await favorites.getByRole('combobox', { name: 'Favorite icon size' }).count(), 0)
+  await page.getByRole('navigation', { name: 'Browser services' }).getByRole('button', { name: 'Settings' }).click()
+  await page.getByRole('button', { name: 'Appearance', exact: true }).click()
+  await page.getByRole('combobox', { name: 'Favorite icon size' }).selectOption('small')
   await page.locator('.favorites-small').waitFor()
   await tile.click({ button: 'right' })
   await page.getByRole('button', { name: 'Edit favorite', exact: true }).click()
@@ -360,28 +454,68 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   assert.equal(isolated.settings.theme, 'dark')
   assert.equal(isolated.settings.accentColor, '')
   assert.equal(isolated.settings.favoriteSize, 'medium')
+  assert.equal(isolated.settings.keepSidebarOpen, true)
+  assert.equal(isolated.settings.sidebarWidth, '320')
   await page.evaluate(() => window.lexn.command('saveFavorite', 'google', 'https://www.google.com/', 'Research Google', 'R'))
   await page.evaluate(() => window.lexn.command('setSetting', 'theme', 'slate'))
   await page.locator('.browser.slate').waitFor()
   await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: 105, deltaY: 0 })
   await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Personal' }, 'horizontal swipe did not advance to Personal')
-  await page.locator('.spatial-scroll.swipe-left').waitFor()
   for (let packet = 0; packet < 7; packet++) {
     await sleep(110)
-    const surface = packet % 2 ? '.service-rail' : '.spatial-sidebar'
+    const surface = packet % 2 ? '.spatial-footer' : '.spatial-sidebar'
     await page.locator(surface).dispatchEvent('wheel', { deltaX: 95, deltaY: 36 })
     assert.equal((await getState(page)).workspaceId, (await getState(page)).workspaces[0].id)
   }
   await sleep(330)
   await page.locator('.spatial-sidebar').dispatchEvent('wheel', { deltaX: -105, deltaY: 0 })
   await waitUntil(async () => { const state = await getState(page); return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Research' }, 'reverse swipe did not return to Research')
-  await page.locator('.spatial-scroll.swipe-right').waitFor()
+  if (process.platform === 'darwin') {
+    assert.equal(await page.evaluate(() => window.lexn.usesNativeSpaceScroll()), true)
+    await app.evaluate(({ BrowserWindow }) => {
+      const root = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('lexn://shell'))
+      const send = (phase, dx, momentum = false) => root.webContents.send(
+        'lexn:space-scroll', { x: 100, dx, dy: 0, phase, momentum },
+      )
+      send('begin', 0); send('change', 70); send('end', 0)
+      send('change', 120, true)
+      send('begin', 0); send('change', 70); send('end', 0)
+    })
+    await waitUntil(async () => {
+      const state = await getState(page)
+      return state.workspaces.find(item => item.id === state.workspaceId)?.name === 'Work'
+    }, 'two rapid native swipes did not move exactly two Spaces')
+    await page.evaluate(async () => {
+      const current = await window.lexn.getState()
+      await window.lexn.command('workspace', current.workspaces.find(space => space.name === 'Research').id)
+    })
+  }
+
 
   await go(page, origin + '/one')
   await waitUntil(async () => (await active(page)).title === 'LexN Fixture One', 'profile navigation failed')
   await waitUntil(async () => (await page.evaluate(() => window.lexn.cookies())).some(cookie => cookie.name === 'lexn_fixture'), 'profile cookie was not set')
+  await app.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()[0]
+    const timeline = []
+    Reflect.set(window, 'drewTestSwipeFrames', timeline)
+    const timer = setInterval(() => {
+      if (window.isDestroyed()) {
+        clearInterval(timer)
+        return
+      }
+      const viewport = window.contentView.children.find(view => view.children.length > 0)
+      if (!viewport) return
+      timeline.push({ width: viewport.getBounds().width, pages: viewport.children.map(page => page.getBounds()) })
+    }, 8)
+    setTimeout(() => clearInterval(timer), 550)
+  })
   await page.getByRole('button', { name: 'Personal', exact: true }).click()
   assert.deepEqual(await page.evaluate(() => window.lexn.cookies()), [])
+  await waitUntil(async () => (await geometry()).website?.x === 320, 'the second Profile did not keep the shared width')
+  const frames = await app.evaluate(({ BrowserWindow }) => Reflect.get(BrowserWindow.getAllWindows()[0], 'drewTestSwipeFrames'))
+  assert.ok(frames.length > 0 && frames.every(({ width, pages }) =>
+    pages.length === 1 && pages[0].x === 0 && pages[0].width === width), 'the webpage moved during the Profile switch')
   await page.getByRole('button', { name: 'Research', exact: true }).click()
   await page.getByRole('button', { name: 'Add Space or profile' }).click()
   await page.getByRole('button', { name: 'New Space', exact: true }).click()
@@ -421,6 +555,8 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('button', { name: 'Personal', exact: true }).click()
   await page.locator('.browser.black').waitFor()
   const personal = await getState(page)
+  assert.equal(personal.settings.keepSidebarOpen, true)
+  assert.equal(personal.settings.sidebarWidth, '320')
   assert.equal(personal.settings.favoriteSize, 'small')
   assert.equal(personal.settings.accentColor, '#23a878')
   assert.equal(personal.settings.colorIntensity, 'vivid')
@@ -446,7 +582,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await waitUntil(async () => await activeView(app) === origin + '/two', 'pinned tab did not attach')
   await app.evaluate(({ BrowserWindow }) => {
     const root = BrowserWindow.getAllWindows().find(win => win.webContents.getURL().startsWith('lexn://'))
-    return root.contentView.children.find(child => child.webContents?.getURL().startsWith('http:')).webContents
+    return root.contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith('http:')).webContents
       .executeJavaScript('document.getElementById("blank").click()', true)
   })
   await waitUntil(async () => app.evaluate(({ BrowserWindow }) =>
@@ -471,7 +607,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
     await page.getByRole('button', { name: 'Add to Split View' }).click()
   }
   await waitUntil(async () => await app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows()[0].contentView.children.filter(child => child.webContents?.getURL().startsWith('http:')).length) === 4,
+    BrowserWindow.getAllWindows()[0].contentView.children.flatMap(child => child.children).filter(child => child.webContents?.getURL().startsWith('http:')).length) === 4,
     'four native browsing panes were not attached')
   const divider = await page.getByRole('button', { name: 'Resize split panes' }).first().boundingBox()
   const before = (await page.locator('.split-pane').first().boundingBox()).width

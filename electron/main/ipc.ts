@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { app, clipboard, dialog, ipcMain, safeStorage, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { engines, HOME, type ArchivedTab, type SavedLogin, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup } from '../../shared/model.js'
+import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
+import type { FloatingSidebar } from './floatingSidebar.js'
 import type { Tabs } from './tabs.js'
 import { showExtension } from './extensions.js'
 import type { Downloads } from './profile.js'
@@ -65,7 +67,7 @@ function boolean(value: unknown) {
 
 export function bindIpc(
   window: BrowserWindow, uiUrl: string, db: Database, tabs: Tabs,
-  downloads: Downloads, changed: () => void,
+  downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll = false,
 ) {
   const state = () => browserState(db, tabs, downloads)
   const currentTab = (value: unknown) => {
@@ -184,7 +186,7 @@ export function bindIpc(
     pageAction: (value, action) => tabs.action(currentTab(value), choice(action, ['back', 'forward', 'reload', 'stop', 'home'])),
     reopenTab: () => tabs.reopen(),
     nextTab: reverse => tabs.next(reverse === undefined ? false : boolean(reverse)),
-    workspace: (value, direction) => tabs.switchWorkspace(id(value), direction === -1 ? -1 : direction === 1 ? 1 : 0),
+    workspace: value => tabs.switchWorkspace(id(value)),
     saveWorkspace: (value, name, accent, profile, icon) => {
       const label = required(name, 48)
       const color = hexColor(accent)
@@ -223,7 +225,7 @@ export function bindIpc(
         case 'sidebarWidth': {
           const width = Number(text(value, 3))
           if (!Number.isInteger(width) || width < 242 || width > 360) throw new Error('Invalid sidebar width.')
-          db.setProfileSetting(profile, key, String(width))
+          db.set(key, String(width))
           break
         }
         case 'homepage': db.setProfileSetting(profile, key, value === HOME || value === '' ? HOME : site(value)); break
@@ -233,8 +235,15 @@ export function bindIpc(
           break
         case 'archiveHours': db.setProfileSetting(profile, key, choice(value, ['0', '12', '24', '72', '168'])); break
         case 'favoriteSize': db.setProfileSetting(profile, key, choice(value, ['small', 'medium', 'large'])); break
-        case 'keepSidebarOpen':
+        case 'notificationPolicy': db.setProfileSetting(profile, key, choice(value, ['approved', 'block'])); break
+        case 'homeDensity': db.setProfileSetting(profile, key, choice(value, ['relaxed', 'compact'])); break
+        case 'motion': db.setProfileSetting(profile, key, choice(value, ['system', 'off'])); break
+        case 'sidebarDismiss': db.setProfileSetting(profile, key, choice(value, ['quick', 'balanced', 'relaxed'])); break
+        case 'homeRecent':
+        case 'homeClock':
+        case 'homeSuggestions':
         case 'topToolbar': db.setProfileSetting(profile, key, boolean(value)); break
+        case 'keepSidebarOpen': db.set(key, boolean(value)); break
         case 'javascript':
           if (boolean(value) !== db.settings(profile).javascript) {
             db.setProfileSetting(profile, key, boolean(value))
@@ -280,12 +289,19 @@ export function bindIpc(
       await profile.cookies.remove(url.href, text(name, 4096))
       await profile.cookies.flushStore()
     },
-    windows: action => {
-      switch (choice(action, ['minimize', 'maximize', 'close'])) {
-        case 'minimize': window.minimize(); break
-        case 'maximize': if (window.isMaximized()) window.unmaximize(); else window.maximize(); break
-        case 'close': window.close(); break
-      }
+    setShortcut: (value, binding) => {
+      const action = choice(value, shortcutActions)
+      const profile = tabs.profileId
+      const platform = process.platform
+      const overrides = shortcutOverrides(db.settings(profile).keyboardShortcuts, platform)
+      const fallback = defaultShortcut(action, platform)
+      const next = binding === null ? fallback : text(binding, 7)
+      if (!allowedShortcut(next, platform)) throw new Error('That key combination is reserved or unsupported.')
+      const conflict = shortcutActions.find(item => item !== action && (overrides[item] ?? defaultShortcut(item, platform)) === next)
+      if (conflict) throw new Error('That shortcut is already used for ' + shortcutDefinitions[conflict].label.toLowerCase() + '.')
+      if (next === fallback) delete overrides[action]
+      else overrides[action] = next
+      db.setProfileSetting(profile, 'keyboardShortcuts', JSON.stringify(overrides))
     },
   }
   const trusted = (event: IpcMainEvent | IpcMainInvokeEvent) =>
@@ -298,6 +314,7 @@ export function bindIpc(
     })
   }
   invoke('lexn:state', state)
+  invoke('lexn:uses-native-space-scroll', () => nativeSpaceScroll)
   invoke('lexn:history', query => db.history(text(query), tabs.profileId))
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
   invoke('lexn:cookies', async () => (await downloads.sessionFor(tabs.profileId).cookies.get({})).map(({ name, domain, path, secure }) => ({
@@ -329,8 +346,15 @@ export function bindIpc(
     } else tabs.layout(rect(value))
   }
   ipcMain.on('lexn:layout', layout)
+  const layoutSidebar = (event: IpcMainEvent, width: unknown, open: unknown, animate: unknown) => {
+    if (!trusted(event) || typeof width !== 'number' || !Number.isInteger(width) ||
+        (width !== 0 && (width < 242 || width > 360)) || typeof open !== 'boolean' || typeof animate !== 'boolean') return
+    sidebar.layout(width, open, animate)
+  }
+  ipcMain.on('lexn:sidebar-layout', layoutSidebar)
   return () => {
-    for (const channel of ['state', 'history', 'frequent', 'cookies', 'command']) ipcMain.removeHandler('lexn:' + channel)
+    for (const channel of ['state', 'history', 'frequent', 'cookies', 'command', 'uses-native-space-scroll']) ipcMain.removeHandler('lexn:' + channel)
     ipcMain.removeListener('lexn:layout', layout)
+    ipcMain.removeListener('lexn:sidebar-layout', layoutSidebar)
   }
 }

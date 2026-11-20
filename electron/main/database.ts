@@ -118,6 +118,22 @@ const migrations = [
   DROP TABLE global_favorites;
   `,
 
+  `
+  WITH active_profile AS (
+    SELECT COALESCE(profileId, id) AS id FROM workspaces
+    ORDER BY (json_quote(workspaces.id) = (SELECT value FROM settings WHERE key = 'workspaceId')) DESC, rowid
+    LIMIT 1
+  ), sidebar_defaults(key, value) AS (
+    VALUES ('keepSidebarOpen', '${JSON.stringify(defaultSettings.keepSidebarOpen)}'),
+           ('sidebarWidth', '${JSON.stringify(defaultSettings.sidebarWidth)}')
+  )
+  INSERT INTO settings
+    SELECT defaults.key, COALESCE(profile_settings.value, defaults.value)
+    FROM active_profile CROSS JOIN sidebar_defaults AS defaults
+    LEFT JOIN profile_settings ON profile_settings.profileId = active_profile.id AND profile_settings.key = defaults.key
+    WHERE true
+    ON CONFLICT(key) DO UPDATE SET value = excluded.value;
+  `,
 ]
 
 type Value = string | number | null
@@ -130,7 +146,7 @@ export class Database {
     try {
       this.db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 2500;')
       const version = this.one<{ user_version: number }>('PRAGMA user_version')?.user_version ?? 0
-      if (version > migrations.length) throw new Error('This profile requires a newer version of LexN.')
+      if (version > migrations.length) throw new Error('This profile requires a newer version of Drew.')
       for (let index = version; index < migrations.length; index++) {
         this.transaction(() => {
           this.db.exec(migrations[index] + 'PRAGMA user_version = ' + (index + 1))
@@ -204,7 +220,12 @@ export class Database {
         return []
       }
     })
-    return { ...defaultSettings, ...Object.fromEntries(overrides) }
+    return {
+      ...defaultSettings,
+      ...Object.fromEntries(overrides),
+      keepSidebarOpen: this.get('keepSidebarOpen', defaultSettings.keepSidebarOpen),
+      sidebarWidth: this.get('sidebarWidth', defaultSettings.sidebarWidth),
+    }
   }
 
   setProfileSetting(profile: string, key: keyof Settings, value: boolean | string) {

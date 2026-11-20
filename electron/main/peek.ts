@@ -3,7 +3,7 @@ import { webUrl } from '../../shared/navigation.js'
 
 export function openPeek(parent: BrowserWindow, profile: Session, url: string, promote: (url: string) => void, javascript: boolean) {
   const preview = new BrowserWindow({
-    parent, modal: true, show: false, width: 900, height: 650, title: 'LexN · Link preview',
+    parent, modal: true, show: false, width: 900, height: 650, title: 'Drew · Link preview',
     backgroundColor: '#171a21', autoHideMenuBar: true,
     webPreferences: { session: profile, sandbox: true, nodeIntegration: false, contextIsolation: true, webSecurity: true, javascript },
   })

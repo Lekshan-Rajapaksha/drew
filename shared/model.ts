@@ -1,4 +1,7 @@
 export const HOME = 'about:blank'
+export const WINDOW_CAPTION_HEIGHT = 36
+export const SIDEBAR_INSET = 8
+export const SIDEBAR_RADIUS = 18
 export const accents = ['#b5a2ff', '#72e3ba', '#80baff', '#f9b97b', '#fc91b5', '#6de5ef', '#ff8c82', '#dcc576'] as const
 export const engines = {
   google: 'https://www.google.com/search?q=',
@@ -19,12 +22,22 @@ export interface Settings {
   topToolbar: boolean
   keepSidebarOpen: boolean
   favoriteSize: string
+  homeRecent: boolean
+  homeClock: boolean
+  homeSuggestions: boolean
+  homeDensity: 'relaxed' | 'compact'
+  motion: 'system' | 'off'
+  sidebarDismiss: 'quick' | 'balanced' | 'relaxed'
+  notificationPolicy: 'approved' | 'block'
+  keyboardShortcuts: string
   archiveHours: string
   javascript: boolean
 }
 export const defaultSettings: Settings = {
   engine: 'google', homepage: HOME, startup: 'restore', theme: 'dark',
-  background: 'violet', accentColor: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
+  background: 'match', accentColor: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
+  homeRecent: true, homeClock: true, homeSuggestions: true,
+  homeDensity: 'relaxed', motion: 'system', sidebarDismiss: 'balanced', notificationPolicy: 'approved', keyboardShortcuts: '{}',
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
 export interface TabGroup { id: string; workspaceId: string; name: string; parentId: string | null }
@@ -88,7 +101,7 @@ export interface Commands {
   pageAction: [id: string, action: 'back' | 'forward' | 'reload' | 'stop' | 'home']
   reopenTab: []
   nextTab: [reverse?: boolean]
-  workspace: [id: string, direction?: number]
+  workspace: [id: string]
   saveWorkspace: [id: string | null, name: string, accent: string, profileId?: string | null, icon?: string]
   saveBookmark: [id: string | null, title: string, url: string, folder: string | null]
   deleteBookmark: [id: string]
@@ -101,9 +114,12 @@ export interface Commands {
   clearData: [kind: 'history' | 'cookies' | 'cache' | 'storage']
   setPermission: [origin: string, permission: Permission, mode: 'allow' | 'block' | 'reset']
   removeCookie: [domain: string, path: string, name: string, secure: boolean]
-  windows: [action: 'minimize' | 'maximize' | 'close']
+  setShortcut: [action: string, binding: string | null]
 }
 export type Shortcut = 'command' | 'split' | 'toolbar' | 'browse' | 'address' | 'sidebar' | 'history' | 'bookmarks' | 'downloads' | 'settings'
+export interface SpaceScroll {
+  x: number; dx: number; dy: number; phase: 'begin' | 'change' | 'end' | 'discrete'; momentum: boolean
+}
 export interface Bridge {
   platform: string
   version: string
@@ -113,7 +129,10 @@ export interface Bridge {
   frequent(): Promise<Visit[]>
   cookies(): Promise<SiteCookie[]>
   layout(rect: ViewRect | PaneRect[] | null): void
+  layoutSidebar(width: number, open: boolean, animate: boolean): void
   onState(listener: (state: BrowserState) => void): () => void
+  usesNativeSpaceScroll(): Promise<boolean>
+  onSpaceScroll(listener: (scroll: SpaceScroll) => void): () => void
   onPointer(listener: (x: number | null) => void): () => void
   onShortcut(listener: (name: Shortcut) => void): () => void
 }

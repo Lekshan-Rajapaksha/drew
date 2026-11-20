@@ -79,7 +79,7 @@ const bytes = (bytes: number) => bytes < 1024 ? bytes + ' B' : bytes < 1024 ** 2
 
 export function DownloadsPage({ browser }: { browser: BrowserState }) {
   return <div className="management">
-    <PageHeader icon={<DownloadIcon size={24} />} title="Downloads" subtitle="View files saved by LexN and track active downloads." />
+    <PageHeader icon={<DownloadIcon size={24} />} title="Downloads" subtitle="View files saved by Drew and track active downloads." />
     {browser.downloads.length === 0 && <Empty icon={<DownloadIcon size={24} />} title="No downloads yet" detail="Files you download from websites will appear here." />}
     <div className="records">{browser.downloads.map(item => <article className="record" key={item.id}>
       <span className="record-icon"><DownloadIcon size={17} /></span>

@@ -9,6 +9,7 @@ import type { Database } from './database.js'
 
 function configurePermissions(session: Session, db: Database, profile: string) {
   const permits = (origin: string, permission: Permission) => origin.startsWith('https://') &&
+    (permission !== 'notifications' || db.settings(profile).notificationPolicy !== 'block') &&
     db.one<{ allow: number }>('SELECT allow FROM profile_permissions WHERE workspaceId = ? AND origin = ? AND permission = ?', profile, origin, permission)?.allow === 1
   session.setPermissionCheckHandler((_contents, permission, requestingOrigin, details) => {
     if (!details.isMainFrame) return false

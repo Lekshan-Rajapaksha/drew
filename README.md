@@ -1,10 +1,10 @@
-# LexN Browser
+# Drew
 
-LexN is a Chromium desktop browser with a vertical tab sidebar, isolated local profiles, and a customizable new tab page. It targets macOS 13 or newer on Apple Silicon and supported Intel Macs, and Windows 10/11 on x64. See the [Electron platform requirements](https://www.electronjs.org/docs/latest/breaking-changes/).
+Drew is a Chromium desktop browser with a vertical tab sidebar, isolated local profiles, and a customizable new tab page. It targets macOS 13 or newer on Apple Silicon and supported Intel Macs, and Windows 10/11 on x64. See the [Electron platform requirements](https://www.electronjs.org/docs/latest/breaking-changes/).
 
 ## Get started
 
-Use Node.js 24.15 or newer with npm, a desktop session, and enough disk space for Electron and the package outputs. The first Electron launch downloads the runtime for the current platform.
+Use Node.js 24.15 or newer with npm, a desktop session, and enough disk space for Electron and the package outputs. The first Electron launch downloads the runtime for the current platform. macOS builds use Xcode Command Line Tools and the Node.js development headers to compile the scroll monitor.
 
 ```sh
 npm ci
@@ -26,14 +26,17 @@ Rebuild after editing. Dev and packaged launches both load the same compiled, lo
 ## Browsing
 
 - **Cmd/Ctrl+T** opens the Command Bar to navigate in a new tab, switch to open tabs, or run browser actions such as Clear Cache and Split View. **Cmd/Ctrl+L** opens the same bar for the current address. Use the arrows and Enter to choose a result.
-- Move the pointer to the left edge to reveal the sidebar and service rail. They slide away when the pointer leaves. **Cmd/Ctrl+S** holds the sidebar open or returns it to auto-hide. Set **Appearance → Keep tab sidebar expanded** to lock it open across launches. With the macOS top toolbar and sidebar hidden, the page fills the window without a border. The optional navigation toolbar stays hidden by default and can be toggled in Appearance or with **Cmd/Ctrl+Shift+Y**.
-- Swipe horizontally with two fingers over the sidebar or click the bottom dots to switch Spaces. The page and tab list slide in the direction of travel. Momentum stays within one gesture until the scroll stream goes quiet, so one swipe advances one Space. **+ → New Space** lets you choose an existing Profile. **+ → New profile** creates an isolated Profile and its first Space. Click the Space name to edit its icon, color, or name.
-- Favorites are stored per Profile and available in Spaces linked to that Profile. Click + to add a URL, label, or optional emoji icon. Drop an open tab or a link into the grid to add it. Drag tiles to reorder them, use the size selector to change their size, or right-click a tile to edit or remove it. Pin a tab to keep it in its Space or move it into a nested folder. Today tabs auto-archive after 24 hours of inactivity by default. **Clear** archives them immediately, and **Archived tabs** lets you restore them. Set the timeout or turn it off in General.
+- **Settings → New Tab** controls the background, layout spacing, recent activity, clock, and suggestions from your local history. **Settings → Appearance** controls the Profile palette, sidebar hide delay, and interface motion. The Profile theme and accent apply to Home and the browser interface.
+- Move the pointer to the left edge to reveal the sidebar and service rail. The full-height rounded sidebar floats over the live webpage and slides away when the pointer leaves. Pinning it reserves space and resizes the page. **Cmd/Ctrl+S** holds the sidebar open or returns it to auto-hide. The pin and sidebar width apply to every Profile and persist across launches. Bookmarks, History, Downloads, Archived tabs, and Settings sit in the footer. Native window controls sit over the top corners. With the optional toolbar hidden, web content reaches the top edge. The optional navigation toolbar stays hidden by default and can be toggled in Appearance or with **Cmd/Ctrl+Shift+Y**.
+- Swipe horizontally with two fingers over the sidebar or click the bottom dots to switch Spaces. The new tab list fades in briefly while the page stays in place. On macOS, Drew reads the scroll phases, so a new swipe can advance immediately while the previous swipe’s momentum is ignored. Other platforms use wheel-event timing as a fallback for trackpads. **+ → New Space** lets you choose an existing Profile. **+ → New profile** creates an isolated Profile and its first Space. Click the Space name to edit its icon, color, or name.
+- Favorites are stored per Profile and available in Spaces linked to that Profile. Click + to add a URL, label, or optional emoji icon. Drop an open tab or a link into the grid to add it. Use the heart beside the address to add the current website. Drag tiles to reorder them, use **Settings → Appearance → Favorite icon size** to change their size, or right-click a tile to edit or remove it. The address bar shows the site’s favicon when available. Pin a tab to keep it in its Space or move it into a nested folder. Today tabs auto-archive after 24 hours of inactivity by default. **Clear** archives them immediately, and **Archived tabs** lets you restore them. Set the timeout or turn it off in General.
 - Drag a tab onto the viewport, choose **Add to Split View**, or press **Cmd/Ctrl+Shift+D** to add a pane. Split View supports up to four pages with separate addresses and draggable dividers.
-- Links away from a pinned site can open a preview window. Use **Esc** to close it or **Cmd/Ctrl+Enter** to promote it to a tab. Web links the operating system hands off to LexN open in the same preview. On macOS, choose LexN in System Settings to route default-browser links to it.
+- Links away from a pinned site can open a preview window. Use **Esc** to close it or **Cmd/Ctrl+Enter** to promote it to a tab. Web links the operating system hands off to Drew open in the same preview. On macOS, choose Drew in System Settings to route default-browser links to it.
 - Media tabs show play/pause and mute controls in the sidebar when the page exposes suitable media. Native site-driven picture-in-picture can still be used where supported.
 
-Profiles own site storage, history, bookmarks, downloads, permissions, saved passwords, installed extensions, Favorites, and browser preferences. Appearance offers True Black, Soft Dark, Slate, Light, and system modes, plus an arbitrary hex accent, three intensity levels, and separate new tab backgrounds. The 0.4.0 upgrade keeps previously global Favorites and preferences in the original Personal Profile. Other Profiles start with their own defaults. The Passwords page saves manually entered credentials using system encryption on macOS and Windows. The Extensions page loads unpacked extensions into the current Profile. Compatible extension popups can be found by name in the Command Bar. Electron provides a subset of Chrome extension APIs. See the [Electron extension support documentation](https://www.electronjs.org/docs/latest/api/extensions).
+Profiles own site storage, history, bookmarks, downloads, permissions, saved passwords, installed extensions, Favorites, and browser preferences. Appearance offers True Black, Soft Dark, Slate, Light, and system modes, plus a custom hex accent and three intensity levels. The 0.4.0 upgrade keeps previously global Favorites and preferences in the original Personal Profile. Other Profiles start with their own defaults. The Passwords page saves manually entered credentials using system encryption on macOS and Windows. The Extensions page loads unpacked extensions into the current Profile. Compatible extension popups can be found by name in the Command Bar. Electron provides a subset of Chrome extension APIs. See the [Electron extension support documentation](https://www.electronjs.org/docs/latest/api/extensions).
+
+Settings includes a Notifications section with per-site rules and a block-all option, and a Keyboard Shortcuts section for editing Profile-specific bindings.
 
 ## Architecture
 
@@ -52,7 +55,7 @@ The main process hosts both the shell and the website views. The active website 
 
 ### SQLite and profile data
 
-The database lives at `lexn.sqlite` under Electron’s `app.getPath('userData')`. SQLite uses `node:sqlite` from Electron, WAL mode, foreign keys and transactional migrations keyed on `PRAGMA user_version`.
+The database lives at `lexn.sqlite` under Electron’s `app.getPath('userData')`. Drew 0.5.0 uses the existing application data directory and macOS Safe Storage name from LexN. SQLite uses `node:sqlite` from Electron, WAL mode, foreign keys and transactional migrations keyed on `PRAGMA user_version`.
 
 | Tables | Stored data |
 | --- | --- |
@@ -66,13 +69,13 @@ The startup policy restores the active Space and tab URLs by default. Spaces can
 
 ### Security model
 
-Website views use Chromium sandboxing, context isolation, and web security with Node integration disabled. Website processes receive no LexN preload or privileged API. The shell serves bundled assets from a dedicated `lexn://shell` origin under a restrictive content security policy. Main-process IPC checks the sender, top-level frame, and exact shell URL, then validates command arguments before acting. Website navigation and popup routing accept HTTP and HTTPS, with a dedicated blank page for new tabs. Chromium retains default TLS validation. Site permissions default to deny, and permission requests from embedded third-party frames are denied. Restored site content can still use the network through Chromium.
+Website views use Chromium sandboxing, context isolation, and web security with Node integration disabled. Website processes receive no Drew preload or privileged API. The shell serves bundled assets from a dedicated `lexn://shell` origin under a restrictive content security policy. Main-process IPC checks the sender, top-level frame, and exact shell URL, then validates command arguments before acting. Website navigation and popup routing accept HTTP and HTTPS, with a dedicated blank page for new tabs. Chromium retains default TLS validation. Site permissions default to deny, and permission requests from embedded third-party frames are denied. Restored site content can still use the network through Chromium.
 
 The optional assistant sidebar defines an extension point for a future provider. It ships without an external provider, credentials, or automatic page-content collection.
 
 ## Packaging
 
-Build on the target operating system. The installer and app icon use original LexN branding. Build outputs go to a versioned directory under `release/`.
+Build on the target operating system. The installer is named Drew and carries the browser’s existing app icon. Build outputs go to a versioned directory under `release/`.
 
 ### macOS
 
