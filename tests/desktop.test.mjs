@@ -65,7 +65,20 @@ async function shortcut(app, keyCode, modifiers) {
   }, { keyCode, modifiers })
 }
 
+async function focusBrowser(app) {
+  await waitUntil(() => app.evaluate(({ app, BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows().find(window => window.webContents.getURL() === 'lexn://shell/index.html')
+    if (!win || !win.isVisible()) return false
+    if (!win.isFocused()) {
+      app.focus(process.platform === 'darwin' ? { steal: true } : undefined)
+      win.focus()
+    }
+    return win.isFocused()
+  }), 'test browser did not receive focus')
+}
+
 async function pointAt(app, x) {
+  await focusBrowser(app)
   await app.evaluate(({ BrowserWindow }, x) => {
     const win = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('lexn://shell'))
     const bounds = win.getContentBounds()
@@ -149,7 +162,12 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.getByRole('button', { name: 'Customize' }).click()
   await page.getByRole('combobox', { name: 'New tab background' }).waitFor()
   const settingsSections = page.getByRole('navigation', { name: 'Settings sections' })
+  const sectionSearch = page.getByRole('searchbox', { name: 'Find a section' })
+  await sectionSearch.fill('keyboard')
+  await settingsSections.getByRole('button', { name: 'Appearance' }).waitFor({ state: 'detached' })
   await settingsSections.getByRole('button', { name: 'Keyboard Shortcuts' }).click()
+  await page.getByRole('heading', { name: 'Keyboard Shortcuts', exact: true }).first().waitFor()
+  assert.equal(await sectionSearch.inputValue(), '')
   await page.getByRole('combobox', { name: 'Shortcut key' }).selectOption('K')
   await page.getByRole('button', { name: 'Save shortcut' }).click()
   await page.getByRole('status').filter({ hasText: 'Shortcut saved' }).waitFor()
@@ -212,6 +230,7 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
     return geometryNow.website?.x === 0 && geometryNow.website.y === 0 &&
       geometryNow.website.width === geometryNow.width && geometryNow.website.height === geometryNow.height && geometryNow
   }, 'an unpinned page did not fill its viewport')
+  await waitUntil(async () => !(await getState(page)).settings.keepSidebarOpen, 'sidebar unpin did not persist')
   await pointAt(app, 3)
   const floating = await waitUntil(async () => {
     const native = await geometry()
@@ -659,6 +678,10 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
   await page.mouse.up()
   await waitUntil(async () => (await page.locator('.split-pane').first().boundingBox()).width > before + 15,
     'dragging the divider did not resize the split panes')
+  const keyboardWidth = (await page.locator('.split-pane').first().boundingBox()).width
+  await page.getByRole('button', { name: 'Resize split panes' }).first().press('ArrowLeft')
+  await waitUntil(async () => (await page.locator('.split-pane').first().boundingBox()).width < keyboardWidth - 10,
+    'the keyboard could not resize Split View')
 })
 
 test('Drew imports links, switches navigation layouts, and links same-Profile tabs across windows', { timeout: 60000 }, async t => {
@@ -683,6 +706,9 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   const book = join(profile, 'export.md')
   await writeFile(book, '# Reading\n- [Import fixture](https://example.org/imported)')
   await app.evaluate(({ dialog }, path) => {
+    const confirmImport = dialog.showMessageBox
+    dialog.showMessageBox = (window, options) => options.title === 'Drew import'
+      ? Promise.resolve({ response: 0, checkboxChecked: false }) : confirmImport(window, options)
     const original = dialog.showOpenDialog
     dialog.showOpenDialog = async () => {
       dialog.showOpenDialog = original
@@ -725,6 +751,7 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   await page.getByRole('button', { name: 'Appearance', exact: true }).click()
   const layouts = page.getByRole('group', { name: 'Navigation layout' })
   assert.equal(await layouts.locator('.layout-preview').count(), 3)
+  if (process.env.DREW_SETTINGS_SCREENSHOT) await page.screenshot({ path: process.env.DREW_SETTINGS_SCREENSHOT, animations: 'disabled' })
   if (process.env.DREW_LAYOUT_SCREENSHOT) await layouts.screenshot({ path: process.env.DREW_LAYOUT_SCREENSHOT })
   await layouts.getByRole('button', { name: /^Top toolbar/ }).click()
   const topTabs = page.getByRole('navigation', { name: 'Top tabs' })
@@ -837,7 +864,7 @@ test('password imports keep each account in its Profile and reject reassigned en
     assert.match(aliceBlob, /^account-v1:/)
     assert.notEqual(aliceBlob, bobBlob)
     assert.ok(!(await readFile(dbPath)).includes('fixture-a'))
-    await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus())
+    await focusBrowser(app)
     await page.evaluate(id => window.lexn.command('copyLogin', id), alice.id)
     assert.equal(await app.evaluate(({ clipboard }) => clipboard.readText()), 'fixture-a')
     db.prepare('UPDATE saved_logins SET encrypted = ? WHERE id = ?').run(aliceBlob, bob.id)
@@ -926,7 +953,7 @@ test('saved logins fill eligible HTTPS forms on demand and websites have context
   }, { origin, expression })
   const values = () => inspect("[document.querySelector('#user').value, document.querySelector('#pass').value, typeof window.lexn]")
   assert.deepEqual(await values(), ['', '', 'undefined'])
-  await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].focus())
+  await focusBrowser(app)
   await page.evaluate(() => window.lexn.command('fillLogin'))
   assert.deepEqual(await values(), ['alice', 'fixture-only-password', 'undefined'])
 
@@ -1125,6 +1152,26 @@ test('find, zoom, tab sleep, and private windows use isolated browser state', { 
   await waitUntil(async () => (await view(one.url, 'id')) && (await view(one.url, 'id')) !== firstRenderer, 'sleeping tab did not wake')
   await waitUntil(async () => await view(one.url, 'zoom') === 1, 'saved site zoom did not return after waking the tab')
   assert.ok((await getState(page)).tabs.some(tab => tab.id === two.id))
+  const backup = join(profile, 'test-space.json')
+  const beforeBackup = await getState(page)
+  await page.evaluate(async panes => {
+    await window.lexn.command('setSplit', panes.space, panes.split)
+  }, { space: beforeBackup.workspaceId, split: [{ id: one.id, weight: 1.3 }, { id: two.id, weight: .7 }] })
+  await app.evaluate(({ dialog }, file) => {
+    dialog.showSaveDialog = async () => ({ canceled: false, filePath: file })
+    dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+    dialog.showMessageBox = async () => ({ response: 0, checkboxChecked: false })
+  }, backup)
+  await page.evaluate(() => window.lexn.command('exportSpaceBackup'))
+  const exported = JSON.parse(await readFile(backup, 'utf8'))
+  assert.equal(exported.format, 'drew-space')
+  assert.equal(exported.tabs.filter(tab => tab.url.startsWith(origin)).length, 2)
+  await page.evaluate(() => window.lexn.command('restoreSpaceBackup'))
+  const restoredBackup = await getState(page)
+  assert.notEqual(restoredBackup.workspaceId, beforeBackup.workspaceId)
+  assert.equal(restoredBackup.profileId, beforeBackup.profileId)
+  assert.deepEqual(restoredBackup.split.map(pane => pane.weight), [1.3, .7])
+  assert.ok(restoredBackup.tabs.every(tab => !beforeBackup.tabs.some(previous => previous.id === tab.id)))
   await page.evaluate(() => window.lexn.command('newPrivateWindow'))
   const privatePage = await waitUntil(() => app.context().pages().find(other => other !== page && other.url() === 'lexn://shell/index.html'), 'private window did not start')
   const privateState = await getState(privatePage)
@@ -1140,6 +1187,104 @@ test('find, zoom, tab sleep, and private windows use isolated browser state', { 
     assert.equal(db.prepare('SELECT COUNT(*) as count FROM browser_windows').get().count, 1)
     assert.equal(db.prepare('SELECT COUNT(*) as count FROM tabs WHERE url = ?').get(privateUrl).count, 0)
   } finally { db.close() }
+})
+
+test('automatic archiving keeps active work and host exceptions', { timeout: 60000 }, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'drew-archive-protection-'))
+  const server = createServer(serve)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = 'http://127.0.0.1:' + server.address().port
+  const exceptionOrigin = origin.replace('127.0.0.1', 'localhost')
+  let app
+  t.after(async () => {
+    await app?.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(profile, { recursive: true, force: true })
+  })
+  app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
+  const first = await shellPage(app)
+  await first.evaluate(() => window.lexn.command('finishWelcome'))
+  await app.evaluate(() => {
+    const interval = globalThis.setInterval
+    globalThis.setInterval = (callback, delay, ...args) => {
+      if (delay === 60000) globalThis.runArchiveTick = callback
+      return interval(callback, delay, ...args)
+    }
+  })
+  await first.evaluate(() => window.lexn.command('newWindow'))
+  const page = await waitUntil(() => app.context().pages().find(other => other !== first && other.url() === 'lexn://shell/index.html'),
+    'archive test window did not open', 30000)
+  const open = async url => {
+    await page.evaluate(address => window.lexn.command('newTab', address), url)
+    return waitUntil(async () => {
+      const tab = await active(page)
+      return tab?.url === url && !tab.loading && tab.title.startsWith('LexN Fixture') && tab
+    }, 'archive fixture did not load')
+  }
+  const expired = await open(origin + '/expired')
+  const captured = await open(origin + '/captured')
+  const edited = await open(origin + '/edited')
+  await app.evaluate(async ({ webContents }, url) => {
+    const contents = webContents.getAllWebContents().find(item => item.getURL() === url)
+    await contents.executeJavaScript("document.body.appendChild(document.createElement('textarea')).focus()")
+    await contents.insertText('Unsaved notes')
+  }, edited.url)
+  const allowed = await open(exceptionOrigin + '/awake')
+  const current = await open(origin + '/current')
+  await page.evaluate(() => window.lexn.command('setSetting', 'keepAwakeHosts', 'localhost'))
+  await app.evaluate(({ webContents }, { host, capturedUrl }) => {
+    for (const contents of webContents.getAllWebContents()) {
+      if (contents.getURL().startsWith(host)) contents.isBeingCaptured = () => contents.getURL() === capturedUrl
+    }
+    const now = Date.now
+    Date.now = () => now() + 25 * 3600000
+    try { globalThis.runArchiveTick() } finally { Date.now = now }
+  }, { host: origin, capturedUrl: captured.url })
+  const state = await getState(page)
+  assert.ok(!state.tabs.some(tab => tab.id === expired.id))
+  for (const keep of [current, captured, edited, allowed]) assert.ok(state.tabs.some(tab => tab.id === keep.id), keep.url)
+  assert.ok((await page.evaluate(() => window.lexn.archive('expired', 0))).some(entry => entry.url === expired.url))
+  await page.evaluate(() => window.lexn.command('setSetting', 'blockedResourceHosts', '127.0.0.1'))
+  const embedded = await app.evaluate(({ webContents }, url) =>
+    webContents.getAllWebContents().find(item => item.getURL() === url)
+      .executeJavaScript("fetch('/favicon.ico', { cache: 'no-store' }).then(response => response.ok, () => false)"), current.url)
+  assert.equal(embedded, false)
+  await open(origin + '/top-level-still-works')
+})
+
+test('opening a window with a website homepage does not crash during startup', { timeout: 90000 }, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'drew-homepage-startup-'))
+  const server = createServer(serve)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const home = 'http://127.0.0.1:' + server.address().port + '/two'
+  const launch = () => electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
+  let app
+  t.after(async () => {
+    await app?.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(profile, { recursive: true, force: true })
+  })
+  app = await launch()
+  const shell = await shellPage(app)
+  await shell.evaluate(async home => {
+    await window.lexn.command('finishWelcome')
+    await window.lexn.command('setSetting', 'homepage', home)
+    await window.lexn.command('setSetting', 'startup', 'home')
+  }, home)
+  await shell.evaluate(() => window.lexn.command('newWindow'))
+  const second = await waitUntil(() => app.context().pages().find(page => page !== shell && page.url() === 'lexn://shell/index.html'),
+    'the second browser window did not open', 30000)
+  const homepageLoaded = async page => {
+    const tab = await active(page)
+    return tab?.url === home && tab.title === 'LexN Fixture Two' && !tab.loading
+  }
+  await waitUntil(() => homepageLoaded(second), 'the second window did not load the homepage')
+  await app.close()
+  app = await launch()
+  const restarted = await shellPage(app)
+  await waitUntil(() => homepageLoaded(restarted), 'Drew did not open the homepage after restart')
 })
 
 test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LEXN_TEST_PUBLIC_WEB, timeout: 90000 }, async t => {

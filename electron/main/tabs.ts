@@ -372,20 +372,40 @@ export class Tabs {
     await writeFile(filePath, document, { mode: 0o600 })
   }
 
+  private backgroundProtection(tab: LiveTab, automatic: boolean) {
+    const { state, view } = tab
+    const contents = view?.webContents
+    if (tab === this.active() || this.visibleIds().includes(state.id) ||
+        this.splits.get(state.workspaceId)?.some(pane => pane.id === state.id)) return 'This tab is visible or in Split View.'
+    if (tab.edited) return 'This tab contains edits.'
+    if (tab.pendingUrl || state.loading) return 'This tab is loading.'
+    if (tab.signInWindow) return 'This tab has a sign-in window.'
+    if (state.playing || state.audible || contents?.isBeingCaptured() || contents?.isCurrentlyAudible()) {
+      return 'This tab has active media or capture.'
+    }
+    const profile = this.storageFor(state.workspaceId)
+    const origin = originOf(state.url)
+    if (automatic && origin && this.db.settings(profile).keepAwakeHosts.split(',').includes(new URL(origin).hostname)) {
+      return 'This site is set to stay awake.'
+    }
+    if (!view) return
+    if (this.db.one("SELECT 1 FROM downloads WHERE workspaceId = ? AND state IN ('progressing', 'paused')", profile)) {
+      return 'This Profile has an active download.'
+    }
+    if (this.db.one("SELECT 1 FROM profile_permissions WHERE workspaceId = ? AND origin = ? AND allow = 1 AND permission IN ('camera', 'microphone')", profile, origin)) {
+      return 'This site has permission to use the camera or microphone.'
+    }
+  }
+
   sleep(id: string, automatic = false) {
     const tab = this.tabs.get(id)
     const contents = tab?.view?.webContents
-    if (!tab || !contents || tab.state.url === HOME || tab.pendingUrl || tab.signInWindow || tab.state.loading || tab.state.playing || tab.state.audible ||
-        tab.edited || tab === this.active() || this.visibleIds().includes(id) || this.split.some(pane => pane.id === id) ||
-        contents.isBeingCaptured() || contents.isCurrentlyAudible()) {
-      if (!automatic) throw new Error(tab?.edited ? 'This tab contains edits.' : tab === this.active() || this.visibleIds().includes(id) ? 'This tab is visible.' : tab?.pendingUrl || tab?.state.loading ? 'This tab is loading.' : tab?.signInWindow ? 'This tab has a sign-in window.' : !contents ? 'This tab is already unloaded.' : 'This tab has active media or capture.')
+    if (!tab || !contents || tab.state.url === HOME || (automatic && tab.state.pinned)) return false
+    const protection = this.backgroundProtection(tab, automatic)
+    if (protection) {
+      if (!automatic) throw new Error(protection)
       return false
     }
-    const profile = this.storageFor(tab.state.workspaceId)
-    const origin = originOf(tab.state.url)
-    if (this.db.one("SELECT 1 FROM downloads WHERE workspaceId = ? AND state IN ('progressing', 'paused')", profile)) return false
-    if (this.db.one("SELECT 1 FROM profile_permissions WHERE workspaceId = ? AND origin = ? AND allow = 1 AND permission IN ('camera', 'microphone')", profile, origin)) return false
-    if (automatic && tab.state.pinned) return false
     const entries = contents.navigationHistory.getAllEntries()
     const index = contents.navigationHistory.getActiveIndex()
     if (entries.length && index >= 0) tab.history = { entries, index }
@@ -656,18 +676,16 @@ export class Tabs {
 
   archive(expiredOnly = false) {
     const now = Date.now()
-    const visible = expiredOnly ? this.visibleIds() : []
     const cutoffByProfile = new Map<string, number>()
     const ids = this.list().filter(tab => {
       if (tab.pinned) return false
       if (!expiredOnly) return tab.workspaceId === this.workspaceId
-      if (visible.includes(tab.id)) return false
       const profileId = this.storageFor(tab.workspaceId)
       if (!cutoffByProfile.has(profileId)) {
         const hours = Number(this.db.settings(profileId).archiveHours)
         cutoffByProfile.set(profileId, hours > 0 ? now - hours * 3_600_000 : 0)
       }
-      return tab.lastUsed < cutoffByProfile.get(profileId)!
+      return tab.lastUsed < cutoffByProfile.get(profileId)! && !this.backgroundProtection(this.tabs.get(tab.id)!, true)
     })
     const batch = expiredOnly ? null : randomUUID()
     this.db.transaction(() => {

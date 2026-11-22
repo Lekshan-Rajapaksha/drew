@@ -35,15 +35,18 @@ export function SplitView({ panes, layout, resizePanes, remove, add }: {
     const rightWeight = weights[right.id] ?? 1
     const totalWeight = leftWeight + rightWeight
     handle.setPointerCapture(event.pointerId)
+    let frame = 0
     let resized: Record<string, number> | null = null
     const move = (pointer: PointerEvent) => {
       const next = Math.max(80, Math.min(lhs + rhs - 80, lhs + pointer.clientX - start))
       const units = next / (lhs + rhs) * totalWeight
       resized = { ...weights, [left.id]: units, [right.id]: totalWeight - units }
-      setWeights(resized)
+      cancelAnimationFrame(frame)
+      frame = requestAnimationFrame(() => setWeights(resized))
     }
     handle.addEventListener('pointermove', move)
     handle.addEventListener('lostpointercapture', () => {
+      cancelAnimationFrame(frame)
       handle.removeEventListener('pointermove', move)
       if (resized) resizePanes(resized)
       setWeights(null)
@@ -53,7 +56,21 @@ export function SplitView({ panes, layout, resizePanes, remove, add }: {
     {panes.map((tab, index) => {
       const Wrapper = fragment
       return <Wrapper key={tab.id}>
-        {index > 0 && <button className="pane-divider" type="button" aria-label="Resize split panes" onPointerDown={event => resize(event, panes[index - 1], tab)} />}
+        {index > 0 && <button className="pane-divider" type="button" aria-label="Resize split panes" title="Use Left and Right arrows to resize" onPointerDown={event => resize(event, panes[index - 1], tab)}
+          onKeyDown={event => {
+            if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+            const handle = event.currentTarget
+            const lhs = handle.previousElementSibling?.getBoundingClientRect().width ?? 0
+            const rhs = handle.nextElementSibling?.getBoundingClientRect().width ?? 0
+            if (lhs + rhs < 160) return
+            event.preventDefault()
+            const previous = panes[index - 1].id
+            const total = (weights[previous] ?? 1) + (weights[tab.id] ?? 1)
+            const delta = (event.key === 'ArrowLeft' ? -1 : 1) * (event.shiftKey ? 64 : 24)
+            const next = Math.max(80, Math.min(lhs + rhs - 80, lhs + delta))
+            const left = next / (lhs + rhs) * total
+            resizePanes({ ...weights, [previous]: left, [tab.id]: total - left })
+          }} />}
         <section className="split-pane" style={{ flexGrow: weights[tab.id] ?? 1 }}>
           <header><PaneAddress tab={tab} />
             {index === panes.length - 1 && panes.length < 4 && <Tool label="Add split pane" onClick={add}><Plus size={15} /></Tool>}

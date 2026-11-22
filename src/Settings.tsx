@@ -1,5 +1,8 @@
-import { useEffect, useState, type ReactNode } from 'react'
-import { Cookie, FolderOpen, Settings2, Shield, Trash2 } from 'lucide-react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import {
+  Bell, ChevronRight, Cookie, FolderOpen, Import, Info, Keyboard, LayoutTemplate, Palette,
+  Settings2, Shield, SlidersHorizontal, Trash2,
+} from 'lucide-react'
 import type { BrowserState, Permission, Settings as Preferences, SiteCookie } from '../shared/model'
 import { HOME, profileThemes, themeAccents } from '../shared/model'
 import { AccentPicker } from './AccentPicker'
@@ -15,8 +18,23 @@ function Setting({ label, detail, children }: { label: string; detail?: string; 
   return <div className="setting"><div><strong>{label}</strong>{detail && <p>{detail}</p>}</div><div className="setting-control">{children}</div></div>
 }
 
-const sections = ['General', 'Appearance', 'New Tab', 'Privacy', 'Notifications', 'Keyboard Shortcuts', 'Cookies', 'Import', 'About'] as const
-export type SettingsSection = typeof sections[number]
+const sectionDetails = {
+  General: { icon: SlidersHorizontal, description: 'Search, startup, downloads, and performance.' },
+  Appearance: { icon: Palette, description: 'Navigation layouts, colors, and motion for this Profile.' },
+  'New Tab': { icon: LayoutTemplate, description: 'Customize the first page you see when you open a tab.' },
+  'Keyboard Shortcuts': { icon: Keyboard, description: 'Set the keys you use to get around Drew.' },
+  Privacy: { icon: Shield, description: 'Manage site permissions, browser data, and embedded requests.' },
+  Notifications: { icon: Bell, description: 'Choose which websites can send notifications.' },
+  Cookies: { icon: Cookie, description: 'Review and remove cookies stored by websites.' },
+  Import: { icon: Import, description: 'Bring your data from another browser, or back up a Space.' },
+  About: { icon: Info, description: 'Version, software updates, and default-browser setup.' },
+}
+export type SettingsSection = keyof typeof sectionDetails
+const sectionGroups: { label: string; items: SettingsSection[] }[] = [
+  { label: 'Personalize', items: ['General', 'Appearance', 'New Tab', 'Keyboard Shortcuts'] },
+  { label: 'Site controls', items: ['Privacy', 'Notifications', 'Cookies'] },
+  { label: 'Data and app', items: ['Import', 'About'] },
+]
 
 const gradients = [
   { name: 'Aurora', start: '#7b81ff', end: '#50e2d6' },
@@ -52,6 +70,8 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
   const profile = browser.workspaces.find(item => item.id === browser.profileId)
   const resolvedAccent = settings.accentColor || themeAccents[settings.theme] || space?.accent || '#b5a2ff'
   const [homepage, setHomepage] = useState(settings.homepage === HOME ? '' : settings.homepage)
+  const [keepAwakeHosts, setKeepAwakeHosts] = useState(settings.keepAwakeHosts)
+  const [blockedResourceHosts, setBlockedResourceHosts] = useState(settings.blockedResourceHosts)
   const [linkHosts, setLinkHosts] = useState(settings.linkHosts)
   const [homeSaved, setHomeSaved] = useState(false)
   const [origin, setOrigin] = useState('')
@@ -61,7 +81,10 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
   const [notificationMode, setNotificationMode] = useState<'allow' | 'block'>('allow')
   const [cookies, setCookies] = useState<SiteCookie[]>([])
   const [filter, setFilter] = useState('')
+  const [sectionSearch, setSectionSearch] = useState('')
   const [revision, refresh] = useState(0)
+  const settingsScroll = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { settingsScroll.current?.scrollTo(0, 0) }, [section])
 
   useEffect(() => {
     if (section !== 'Cookies') return
@@ -85,194 +108,250 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
       if (await command('clearData', kind)) refresh(value => value + 1)
     })}>{label}</button>
 
-  return <div className="management settings">
-    <PageHeader icon={<Settings2 size={24} />} title="Settings" subtitle={profile ? 'Preferences for ' + profile.name : 'Manage your Profile preferences.'} />
-    <nav className="section-tabs" aria-label="Settings sections">{sections.map(item =>
-      <button key={item} type="button" aria-pressed={section === item} className={section === item ? 'selected' : ''} onClick={() => setSection(item)}>{item}</button>)}</nav>
-    {section === 'General' && <div className="setting-list">
-      <Setting label="Search engine" detail="Used for searches from the address bar and new tab.">
-        {select('engine', 'Search engine', { google: 'Google', duckduckgo: 'DuckDuckGo', bing: 'Bing' })}
-      </Setting>
-      <Setting label="Home page" detail="Leave blank to use the Drew new tab page.">
-        <form className="inline-form homepage-form" onSubmit={async event => {
-          event.preventDefault()
-          setHomeSaved(await command('setSetting', 'homepage', homepage))
-        }}>
-          <input aria-label="Home page URL" placeholder="https://example.com" value={homepage} onChange={event => { setHomepage(event.target.value); setHomeSaved(false) }} />
-          <button className="secondary" type="submit">Save</button>
-          <button className="secondary" type="button" onClick={async () => {
-            if (await command('setSetting', 'homepage', homepage)) goHome()
-          }}>Open home page</button>
-          {homeSaved && <small role="status">Home page saved</small>}
-        </form>
-      </Setting>
-      <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
-        {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
-      </Setting>
-      {!browser.privateWindow && <Setting label="Open external links in this Profile" detail="Enter exact hostnames, separated by commas.">
-        <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', 'linkHosts', linkHosts) }}>
-          <input aria-label="Website hostnames" value={linkHosts} placeholder="mail.example.com" maxLength={1024} onChange={event => setLinkHosts(event.target.value)} />
-          <button className="secondary" type="submit">Save</button>
-        </form>
-      </Setting>}
-      <Setting label="Memory Saver" detail="Sleep eligible background tabs and reload them when selected.">
-        {select('memorySaver', 'Memory Saver', { off: 'Off', '15': 'After 15 minutes', '30': 'After 30 minutes', '60': 'After 60 minutes' })}
-      </Setting>
-      <Setting label="Battery Saver" detail="Simplifies motion and sleeps eligible tabs sooner.">
-        {select('batterySaver', 'Battery Saver', { off: 'Off', battery: 'On battery', on: 'Always on' })}
-      </Setting>
-      <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
-      <Setting label="Download location" detail={settings.downloadPath || 'System Downloads folder'}>
-        {settings.downloadPath && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'downloadPath', '') }}>Reset</button>}
-        <button type="button" className="secondary" onClick={() => { void command('chooseDownloadPath') }}><FolderOpen size={16} /> Choose folder</button>
-      </Setting>
-    </div>}
-    {section === 'Appearance' && <div className="setting-list">
-      <div className="navigation-layout">
-        <strong>Navigation layout</strong>
-        <div className="layout-options" role="group" aria-label="Navigation layout">
-          {layouts.map(({ id, name, detail }) => <button key={id} type="button"
-            aria-pressed={id === (settings.sidebarStyle === 'compact' ? 'compact' : settings.topToolbar ? 'top' : 'sidebar')}
-            onClick={() => { void command('setNavigationLayout', id) }}>
-            <LayoutPreview layout={id} tabs={settings.topTabs} /><strong>{name}</strong><span>{detail}</span>
-          </button>)}
+  const query = sectionSearch.trim().toLowerCase()
+  const matching = sectionGroups.map(group => ({
+    ...group, items: group.items.filter(item => (item + ' ' + sectionDetails[item].description).toLowerCase().includes(query)),
+  })).filter(group => group.items.length)
+  const SectionIcon = sectionDetails[section].icon
+
+  return <div className="management settings" ref={settingsScroll}>
+    <div className="settings-inner">
+      <PageHeader icon={<Settings2 size={24} />} title="Settings"
+        subtitle={profile ? 'Preferences for ' + profile.name : 'Manage Profile preferences.'} />
+      <div className="settings-layout">
+        <div className="settings-navigation">
+          <Filter label="Find a section" value={sectionSearch} change={setSectionSearch} />
+          <nav aria-label="Settings sections">
+            {matching.map(group => <div className="settings-nav-group" key={group.label}>
+              <p>{group.label}</p>
+              {group.items.map(item => {
+                const Icon = sectionDetails[item].icon
+                return <button key={item} type="button" aria-pressed={section === item} onClick={() => {
+                  setSection(item); setSectionSearch('')
+                }}>
+                  <Icon size={17} aria-hidden="true" /><span>{item}</span>
+                  {section === item && <ChevronRight size={14} aria-hidden="true" />}
+                </button>
+              })}
+            </div>)}
+            {!matching.length && <p className="settings-no-results" role="status">No matching sections.</p>}
+          </nav>
         </div>
+        <section className="settings-content" aria-labelledby="settings-section-title">
+          <header className="settings-section-header">
+            <span className="settings-section-icon"><SectionIcon size={22} aria-hidden="true" /></span>
+            <div><h2 id="settings-section-title">{section}</h2><p>{sectionDetails[section].description}</p></div>
+          </header>
+          {section === 'General' && <div className="setting-list">
+            <Setting label="Search engine" detail="Used for searches from the address bar and new tab.">
+              {select('engine', 'Search engine', { google: 'Google', duckduckgo: 'DuckDuckGo', bing: 'Bing' })}
+            </Setting>
+            <Setting label="Home page" detail="Leave blank to use the Drew new tab page.">
+              <form className="inline-form homepage-form" onSubmit={async event => {
+                event.preventDefault()
+                setHomeSaved(await command('setSetting', 'homepage', homepage))
+              }}>
+                <input aria-label="Home page URL" placeholder="https://example.com" value={homepage} onChange={event => { setHomepage(event.target.value); setHomeSaved(false) }} />
+                <button className="secondary" type="submit">Save</button>
+                <button className="secondary" type="button" onClick={async () => {
+                  if (await command('setSetting', 'homepage', homepage)) goHome()
+                }}>Open home page</button>
+                {homeSaved && <small role="status">Home page saved</small>}
+              </form>
+            </Setting>
+            <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
+              {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
+            </Setting>
+            {!browser.privateWindow && <Setting label="Open external links in this Profile" detail="Enter exact hostnames, separated by commas.">
+              <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', 'linkHosts', linkHosts) }}>
+                <input aria-label="Website hostnames" value={linkHosts} placeholder="mail.example.com" maxLength={1024} onChange={event => setLinkHosts(event.target.value)} />
+                <button className="secondary" type="submit">Save</button>
+              </form>
+            </Setting>}
+            <Setting label="Memory Saver" detail="Sleep eligible background tabs and reload them when selected.">
+              {select('memorySaver', 'Memory Saver', { off: 'Off', '15': 'After 15 minutes', '30': 'After 30 minutes', '60': 'After 60 minutes' })}
+            </Setting>
+            <HostSetting label="Keep sites awake" setting="keepAwakeHosts" value={keepAwakeHosts} change={setKeepAwakeHosts}
+              detail="Exact hostnames to exclude from automatic sleep and archiving. Separate multiple sites with commas." />
+            <Setting label="Battery Saver" detail="Simplifies motion and sleeps eligible tabs sooner.">
+              {select('batterySaver', 'Battery Saver', { off: 'Off', battery: 'On battery', on: 'Always on' })}
+            </Setting>
+            <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
+            <Setting label="Download location" detail={settings.downloadPath || 'System Downloads folder'}>
+              {settings.downloadPath && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'downloadPath', '') }}>Reset</button>}
+              <button type="button" className="secondary" onClick={() => { void command('chooseDownloadPath') }}><FolderOpen size={16} /> Choose folder</button>
+            </Setting>
+          </div>}
+          {section === 'Appearance' && <div className="setting-list">
+            <div className="navigation-layout">
+              <strong>Navigation layout</strong>
+              <div className="layout-options" role="group" aria-label="Navigation layout">
+                {layouts.map(({ id, name, detail }) => <button key={id} type="button"
+                  aria-pressed={id === (settings.sidebarStyle === 'compact' ? 'compact' : settings.topToolbar ? 'top' : 'sidebar')}
+                  onClick={() => { void command('setNavigationLayout', id) }}>
+                  <LayoutPreview layout={id} tabs={settings.topTabs} /><strong>{name}</strong><span>{detail}</span>
+                </button>)}
+              </div>
+            </div>
+            <Setting label="Top toolbar" detail="Show navigation and the address bar above the webpage.">
+              {toggle('topToolbar', 'Show top toolbar')}
+            </Setting>
+            {settings.topToolbar && <>
+              <Setting label="Top tab strip" detail="Choose where to show the current Space’s tabs.">
+                {select('topTabs', 'Top tab strip', { above: 'Above the address bar', below: 'Below the address bar', hidden: 'Hidden' })}
+              </Setting>
+              <Setting label="Top toolbar buttons">
+                {select('topActions', 'Top toolbar buttons', { full: 'Full controls', minimal: 'Compact controls' })}
+              </Setting>
+            </>}
+            <Setting label="Keep tab sidebar expanded" detail="The pin and sidebar width are shared across all Profiles.">
+              {toggle('keepSidebarOpen', 'Keep tab sidebar expanded')}
+            </Setting>
+            <Setting label="Sidebar hide delay" detail="Controls how long the unpinned sidebar stays open after the pointer leaves.">
+              {select('sidebarDismiss', 'Sidebar hide delay', { quick: 'Quick', balanced: 'Balanced', relaxed: 'Relaxed' })}
+            </Setting>
+            <Setting label="Interface motion" detail="Applies to Space swipes, menus, and other interface transitions.">
+              {select('motion', 'Interface motion', { system: 'Follow system', off: 'Off' })}
+            </Setting>
+            <Setting label="Theme" detail="Applies to Home, the sidebar, Settings, and menus for this Profile.">
+              {select('theme', 'Theme', profileThemes)}
+            </Setting>
+            <Setting label="Profile accent" detail="Tint this Profile’s browser surfaces and controls, or use the theme’s default accent.">
+              <AccentPicker color={resolvedAccent} change={value => { void command('setSetting', 'accentColor', value) }} />
+              {settings.accentColor && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentColor', '') }}>Use default accent</button>}
+            </Setting>
+            <Setting label="Accent gradient" detail="Choose a preset or set the end color to pair with your Profile accent.">
+              <div className="gradient-controls">
+                <div className="gradient-swatches" role="group" aria-label="Accent gradient presets">
+                  {gradients.map(({ name, start, end }) => <button key={name} type="button" aria-label={name} title={name}
+                    aria-pressed={settings.accentColor === start && settings.accentEnd === end}
+                    style={{ backgroundImage: `linear-gradient(135deg, ${start}, ${end})` }}
+                    onClick={() => { void command('setGradient', start, end) }} />)}
+                </div>
+                <label className="accent-input"><input type="color" aria-label="Gradient end color" value={settings.accentEnd || resolvedAccent}
+                  onChange={event => { void command('setSetting', 'accentEnd', event.target.value) }} /> End color</label>
+                {settings.accentEnd && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentEnd', '') }}>Use solid accent</button>}
+              </div>
+            </Setting>
+            <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
+            <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
+          </div>}
+          {section === 'Import' && (browser.privateWindow ? <p>Import is unavailable in private windows.</p> : <>
+            <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />
+            <h2 className="section-heading">Space backup</h2>
+            <p className="muted">Backup includes the current Space’s links, tab folders, and split layout.</p>
+            <div className="import-file-actions">
+              <button type="button" className="secondary" onClick={() => { void command('exportSpaceBackup') }}>Back up this Space</button>
+              <button type="button" className="secondary" onClick={() => { void command('restoreSpaceBackup') }}>Restore a Space backup</button>
+              <button type="button" className="secondary" onClick={() => { void command('exportWorkspace') }}>Export workspace as bookmarks HTML</button>
+            </div>
+          </>)}
+          {section === 'New Tab' && <div className="setting-list">
+            <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
+              {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}
+            </Setting>
+            <Setting label="Layout spacing">{select('homeDensity', 'Layout spacing', { relaxed: 'Relaxed', compact: 'Compact' })}</Setting>
+            <Setting label="Recent activity" detail="Show recent visits from this Profile on the new tab page.">{toggle('homeRecent', 'Show recent activity')}</Setting>
+            <Setting label="Date and time">{toggle('homeClock', 'Show date and time')}</Setting>
+            <Setting label="Local search suggestions" detail="Suggest sites from this Profile’s browsing history while you type.">{toggle('homeSuggestions', 'Show local search suggestions')}</Setting>
+          </div>}
+          {section === 'Privacy' && <>
+            <div className="setting-list">
+              <HostSetting label="Block embedded resource hosts" setting="blockedResourceHosts" value={blockedResourceHosts} change={setBlockedResourceHosts}
+                detail="Block requests to exact hostnames from embedded content. Leave blank to allow all. Changes apply to new requests for this Profile." />
+              <Setting label="JavaScript" detail="Applies to websites in this Profile. Changing it reloads the active tab.">
+                <input aria-label="Enable website JavaScript" type="checkbox" checked={settings.javascript} onChange={event => { void command('setSetting', 'javascript', event.target.checked) }} />
+              </Setting>
+              <Setting label="Browsing history">{clear('history', 'Clear history', 'Delete all recorded visits from this profile.')}</Setting>
+              <Setting label="Cached files">{clear('cache', 'Clear cache', 'Remove cached resources from the website profile.')}</Setting>
+              <Setting label="Website data" detail="Clears cookies, cache, and other Chromium site data. Active pages will reload.">
+                {clear('storage', 'Clear website data', 'This will remove Chromium site data and can sign you out of websites.')}
+              </Setting>
+            </div>
+            <h2 className="section-heading"><Shield size={18} /> Website permissions</h2>
+            <p className="muted">Camera and microphone access are blocked until allowed for an HTTPS origin. The operating system can also require permission.</p>
+            <form className="inline-form permission-form" onSubmit={event => {
+              event.preventDefault()
+              void command('setPermission', origin, permission, mode).then(ok => { if (ok) setOrigin('') })
+            }}>
+              <input aria-label="Website origin" placeholder="https://example.com" value={origin} onChange={event => setOrigin(event.target.value)} required />
+              <select aria-label="Permission type" value={permission} onChange={event => setPermission(event.target.value as typeof permission)}>
+                <option value="camera">Camera</option><option value="microphone">Microphone</option>
+              </select>
+              <select aria-label="Permission rule" value={mode} onChange={event => setMode(event.target.value as typeof mode)}>
+                <option value="block">Block</option><option value="allow">Allow</option>
+              </select>
+              <button className="primary" type="submit">Save rule</button>
+            </form>
+            <div className="records">{browser.permissions.filter(rule => rule.permission !== 'notifications').map(rule => <article className="record" key={rule.origin + rule.permission}>
+              <div className="record-link"><strong>{rule.origin}</strong><span>{rule.permission} · {rule.allow ? 'Allowed' : 'Blocked'}</span></div>
+              <Tool label={`Remove ${rule.permission} rule for ${rule.origin}`} onClick={() => { void command('setPermission', rule.origin, rule.permission, 'reset') }}><Trash2 size={16} /></Tool>
+            </article>)}</div>
+          </>}
+          {section === 'Notifications' && <>
+            <div className="setting-list">
+              <Setting label="Website notifications" detail="Manage website rules for this Profile. Your operating system may also restrict notifications.">
+                {select('notificationPolicy', 'Website notifications', { approved: 'Allow approved websites', block: 'Block all websites' })}
+              </Setting>
+            </div>
+            <h2 className="section-heading">Website rules</h2>
+            <form className="inline-form permission-form" onSubmit={event => {
+              event.preventDefault()
+              void command('setPermission', notificationOrigin, 'notifications', notificationMode).then(ok => { if (ok) setNotificationOrigin('') })
+            }}>
+              <input aria-label="Notification website" placeholder="https://example.com" value={notificationOrigin}
+                onChange={event => setNotificationOrigin(event.target.value)} required />
+              <select aria-label="Notification site permission" value={notificationMode}
+                onChange={event => setNotificationMode(event.target.value as typeof notificationMode)}>
+                <option value="allow">Allow</option><option value="block">Deny</option>
+              </select>
+              <button className="primary" type="submit">Save notification rule</button>
+            </form>
+            <div className="records">{browser.permissions.filter(rule => rule.permission === 'notifications').map(rule => <article className="record" key={rule.origin}>
+              <div className="record-link"><strong>{rule.origin}</strong><span>{rule.allow ? 'Allowed' : 'Denied'}</span></div>
+              <select aria-label={'Notification permission for ' + rule.origin} value={rule.allow ? 'allow' : 'block'} onChange={event => {
+                void command('setPermission', rule.origin, 'notifications', event.target.value as typeof notificationMode)
+              }}><option value="allow">Allow</option><option value="block">Deny</option></select>
+              <Tool label={'Remove notification rule for ' + rule.origin} onClick={() => {
+                void command('setPermission', rule.origin, 'notifications', 'reset')
+              }}><Trash2 size={16} /></Tool>
+            </article>)}</div>
+          </>}
+          {section === 'Keyboard Shortcuts' && <KeyboardSettings saved={settings.keyboardShortcuts} />}
+          {section === 'Cookies' && <>
+            <div className="cookies-heading"><Filter label="Filter cookies" value={filter} change={setFilter} />
+              {clear('cookies', 'Clear cookies', 'Remove all cookies from the website profile. Websites may sign you out.')}</div>
+            {!cookies.length && <Empty icon={<Cookie size={24} />} title="No cookies stored" detail="Cookies set by websites will appear here." />}
+            <div className="records">{cookies.filter(cookie => (cookie.domain + ' ' + cookie.name).toLowerCase().includes(filter.toLowerCase())).map((cookie, index) =>
+              <article className="record" key={cookie.domain + cookie.path + cookie.name + index}>
+                <div className="record-link"><strong>{cookie.name}</strong><span>{cookie.domain}{cookie.path}</span></div>
+                <Tool label={`Remove cookie ${cookie.name}`} onClick={() => {
+                  void command('removeCookie', cookie.domain, cookie.path, cookie.name, cookie.secure).then(ok => { if (ok) refresh(value => value + 1) })
+                }}><Trash2 size={16} /></Tool>
+              </article>)}</div>
+          </>}
+          {section === 'About' && <div className="setting-list">
+            <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {browser.appVersion}</span></Setting>
+            <Setting label="Software updates"><button type="button" className="secondary" onClick={() => { void command('checkForUpdates') }}>Check for updates</button></Setting>
+            <Setting label="Default browser" detail="Choose Drew in your operating system’s default apps settings.">
+              <button type="button" className="secondary" onClick={() => { void command('defaultBrowser') }}>Set up default browser</button>
+            </Setting>
+            <Setting label="Local profile" detail="Browsing data is stored on this device. Each browser profile keeps separate logins, history, bookmarks, downloads and permissions." />
+          </div>}
+        </section>
       </div>
-      <Setting label="Top toolbar" detail="Show navigation and the address bar above the webpage.">
-        {toggle('topToolbar', 'Show top toolbar')}
-      </Setting>
-      {settings.topToolbar && <>
-        <Setting label="Top tab strip" detail="Choose where to show the current Space’s tabs.">
-          {select('topTabs', 'Top tab strip', { above: 'Above the address bar', below: 'Below the address bar', hidden: 'Hidden' })}
-        </Setting>
-        <Setting label="Top toolbar buttons">
-          {select('topActions', 'Top toolbar buttons', { full: 'Full controls', minimal: 'Compact controls' })}
-        </Setting>
-      </>}
-      <Setting label="Keep tab sidebar expanded" detail="The pin and sidebar width are shared across all Profiles.">
-        {toggle('keepSidebarOpen', 'Keep tab sidebar expanded')}
-      </Setting>
-      <Setting label="Sidebar hide delay" detail="Controls how long the unpinned sidebar stays open after the pointer leaves.">
-        {select('sidebarDismiss', 'Sidebar hide delay', { quick: 'Quick', balanced: 'Balanced', relaxed: 'Relaxed' })}
-      </Setting>
-      <Setting label="Interface motion" detail="Applies to Space swipes, menus, and other interface transitions.">
-        {select('motion', 'Interface motion', { system: 'Follow system', off: 'Off' })}
-      </Setting>
-      <Setting label="Theme" detail="Applies to Home, the sidebar, Settings, and menus for this Profile.">
-        {select('theme', 'Theme', profileThemes)}
-      </Setting>
-      <Setting label="Profile accent" detail="Tint this Profile’s browser surfaces and controls, or use the theme’s default accent.">
-        <AccentPicker color={resolvedAccent} change={value => { void command('setSetting', 'accentColor', value) }} />
-        {settings.accentColor && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentColor', '') }}>Use default accent</button>}
-      </Setting>
-      <Setting label="Accent gradient" detail="Choose a preset or set the end color to pair with your Profile accent.">
-        <div className="gradient-controls">
-          <div className="gradient-swatches" role="group" aria-label="Accent gradient presets">
-            {gradients.map(({ name, start, end }) => <button key={name} type="button" aria-label={name} title={name}
-              aria-pressed={settings.accentColor === start && settings.accentEnd === end}
-              style={{ backgroundImage: `linear-gradient(135deg, ${start}, ${end})` }}
-              onClick={() => { void command('setGradient', start, end) }} />)}
-          </div>
-          <label className="accent-input"><input type="color" aria-label="Gradient end color" value={settings.accentEnd || resolvedAccent}
-            onChange={event => { void command('setSetting', 'accentEnd', event.target.value) }} /> End color</label>
-          {settings.accentEnd && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'accentEnd', '') }}>Use solid accent</button>}
-        </div>
-      </Setting>
-      <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
-      <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
-    </div>}
-    {section === 'Import' && (browser.privateWindow ? <p>Import is unavailable in private windows.</p> : <>
-      <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />
-      <button type="button" className="secondary" onClick={() => { void command('exportWorkspace') }}>Export workspace as bookmarks HTML</button>
-    </>)}
-    {section === 'New Tab' && <div className="setting-list">
-      <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
-        {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}
-      </Setting>
-      <Setting label="Layout spacing">{select('homeDensity', 'Layout spacing', { relaxed: 'Relaxed', compact: 'Compact' })}</Setting>
-      <Setting label="Recent activity" detail="Show recent visits from this Profile on the new tab page.">{toggle('homeRecent', 'Show recent activity')}</Setting>
-      <Setting label="Date and time">{toggle('homeClock', 'Show date and time')}</Setting>
-      <Setting label="Local search suggestions" detail="Suggest sites from this Profile’s browsing history while you type.">{toggle('homeSuggestions', 'Show local search suggestions')}</Setting>
-    </div>}
-    {section === 'Privacy' && <>
-      <div className="setting-list">
-        <Setting label="JavaScript" detail="Applies to websites in this Profile. Changing it reloads the active tab.">
-          <input aria-label="Enable website JavaScript" type="checkbox" checked={settings.javascript} onChange={event => { void command('setSetting', 'javascript', event.target.checked) }} />
-        </Setting>
-        <Setting label="Browsing history">{clear('history', 'Clear history', 'Delete all recorded visits from this profile.')}</Setting>
-        <Setting label="Cached files">{clear('cache', 'Clear cache', 'Remove cached resources from the website profile.')}</Setting>
-        <Setting label="Website data" detail="Clears cookies, cache, and other Chromium site data. Active pages will reload.">
-          {clear('storage', 'Clear website data', 'This will remove Chromium site data and can sign you out of websites.')}
-        </Setting>
-      </div>
-      <h2 className="section-heading"><Shield size={18} /> Website permissions</h2>
-      <p className="muted">Camera and microphone access are blocked until allowed for an HTTPS origin. The operating system can also require permission.</p>
-      <form className="inline-form permission-form" onSubmit={event => {
-        event.preventDefault()
-        void command('setPermission', origin, permission, mode).then(ok => { if (ok) setOrigin('') })
-      }}>
-        <input aria-label="Website origin" placeholder="https://example.com" value={origin} onChange={event => setOrigin(event.target.value)} required />
-        <select aria-label="Permission type" value={permission} onChange={event => setPermission(event.target.value as typeof permission)}>
-          <option value="camera">Camera</option><option value="microphone">Microphone</option>
-        </select>
-        <select aria-label="Permission rule" value={mode} onChange={event => setMode(event.target.value as typeof mode)}>
-          <option value="block">Block</option><option value="allow">Allow</option>
-        </select>
-        <button className="primary" type="submit">Save rule</button>
-      </form>
-      <div className="records">{browser.permissions.filter(rule => rule.permission !== 'notifications').map(rule => <article className="record" key={rule.origin + rule.permission}>
-        <div className="record-link"><strong>{rule.origin}</strong><span>{rule.permission} · {rule.allow ? 'Allowed' : 'Blocked'}</span></div>
-        <Tool label={`Remove ${rule.permission} rule for ${rule.origin}`} onClick={() => { void command('setPermission', rule.origin, rule.permission, 'reset') }}><Trash2 size={16} /></Tool>
-      </article>)}</div>
-    </>}
-    {section === 'Notifications' && <>
-      <div className="setting-list">
-        <Setting label="Website notifications" detail="Manage website rules for this Profile. Your operating system may also restrict notifications.">
-          {select('notificationPolicy', 'Website notifications', { approved: 'Allow approved websites', block: 'Block all websites' })}
-        </Setting>
-      </div>
-      <h2 className="section-heading">Website rules</h2>
-      <form className="inline-form permission-form" onSubmit={event => {
-        event.preventDefault()
-        void command('setPermission', notificationOrigin, 'notifications', notificationMode).then(ok => { if (ok) setNotificationOrigin('') })
-      }}>
-        <input aria-label="Notification website" placeholder="https://example.com" value={notificationOrigin}
-          onChange={event => setNotificationOrigin(event.target.value)} required />
-        <select aria-label="Notification site permission" value={notificationMode}
-          onChange={event => setNotificationMode(event.target.value as typeof notificationMode)}>
-          <option value="allow">Allow</option><option value="block">Deny</option>
-        </select>
-        <button className="primary" type="submit">Save notification rule</button>
-      </form>
-      <div className="records">{browser.permissions.filter(rule => rule.permission === 'notifications').map(rule => <article className="record" key={rule.origin}>
-        <div className="record-link"><strong>{rule.origin}</strong><span>{rule.allow ? 'Allowed' : 'Denied'}</span></div>
-        <select aria-label={'Notification permission for ' + rule.origin} value={rule.allow ? 'allow' : 'block'} onChange={event => {
-          void command('setPermission', rule.origin, 'notifications', event.target.value as typeof notificationMode)
-        }}><option value="allow">Allow</option><option value="block">Deny</option></select>
-        <Tool label={'Remove notification rule for ' + rule.origin} onClick={() => {
-          void command('setPermission', rule.origin, 'notifications', 'reset')
-        }}><Trash2 size={16} /></Tool>
-      </article>)}</div>
-    </>}
-    {section === 'Keyboard Shortcuts' && <KeyboardSettings saved={settings.keyboardShortcuts} />}
-    {section === 'Cookies' && <>
-      <div className="cookies-heading"><Filter label="Filter cookies" value={filter} change={setFilter} />
-        {clear('cookies', 'Clear cookies', 'Remove all cookies from the website profile. Websites may sign you out.')}</div>
-      {!cookies.length && <Empty icon={<Cookie size={24} />} title="No cookies stored" detail="Cookies set by websites will appear here." />}
-      <div className="records">{cookies.filter(cookie => (cookie.domain + ' ' + cookie.name).toLowerCase().includes(filter.toLowerCase())).map((cookie, index) =>
-        <article className="record" key={cookie.domain + cookie.path + cookie.name + index}>
-          <div className="record-link"><strong>{cookie.name}</strong><span>{cookie.domain}{cookie.path}</span></div>
-          <Tool label={`Remove cookie ${cookie.name}`} onClick={() => {
-            void command('removeCookie', cookie.domain, cookie.path, cookie.name, cookie.secure).then(ok => { if (ok) refresh(value => value + 1) })
-          }}><Trash2 size={16} /></Tool>
-        </article>)}</div>
-    </>}
-    {section === 'About' && <div className="setting-list">
-      <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {browser.appVersion}</span></Setting>
-      <Setting label="Software updates"><button type="button" className="secondary" onClick={() => { void command('checkForUpdates') }}>Check for updates</button></Setting>
-      <Setting label="Default browser"><button type="button" className="secondary" onClick={() => { void command('defaultBrowser') }}>Set up default browser</button></Setting>
-      <Setting label="Default browser" detail="Use your operating system’s default apps settings to choose its web browser. OS registration varies by installer." />
-      <Setting label="Local profile" detail="Browsing data is stored on this device. Each browser profile keeps separate logins, history, bookmarks, downloads and permissions." />
-    </div>}
+    </div>
   </div>
+}
+
+
+function HostSetting({ label, detail, setting, value, change }: {
+  label: string; detail: string; setting: 'keepAwakeHosts' | 'blockedResourceHosts'; value: string; change: (value: string) => void
+}) {
+  return <Setting label={label} detail={detail}>
+    <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', setting, value) }}>
+      <input aria-label={label} value={value} placeholder="example.com" maxLength={1024} onChange={event => change(event.target.value)} />
+      <button className="secondary" type="submit">Save</button>
+    </form>
+  </Setting>
 }

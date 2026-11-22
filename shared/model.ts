@@ -42,6 +42,8 @@ export interface Settings {
   homeDensity: 'relaxed' | 'compact'
   memorySaver: 'off' | '15' | '30' | '60'
   linkHosts: string
+  keepAwakeHosts: string
+  blockedResourceHosts: string
   batterySaver: 'off' | 'on' | 'battery'
   motion: 'system' | 'off'
   sidebarDismiss: 'quick' | 'balanced' | 'relaxed'
@@ -55,7 +57,7 @@ export const defaultSettings: Settings = {
   background: 'match', accentColor: '', accentEnd: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
   homeRecent: true, homeClock: true, homeSuggestions: true,
   sidebarStyle: 'full', topTabs: 'above', topActions: 'full',
-  memorySaver: 'off', batterySaver: 'off', linkHosts: '',
+  memorySaver: 'off', batterySaver: 'off', linkHosts: '', keepAwakeHosts: '', blockedResourceHosts: '',
   homeDensity: 'relaxed', motion: 'system', sidebarDismiss: 'balanced', notificationPolicy: 'approved', keyboardShortcuts: '{}',
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
@@ -122,6 +124,8 @@ export interface Commands {
   newWindow: []
   newPrivateWindow: []
   exportWorkspace: []
+  exportSpaceBackup: []
+  restoreSpaceBackup: []
   moveToSpace: [tabId: string, space: string]
   home: []
   setGradient: [string, string]

@@ -79,6 +79,7 @@ export class Downloads {
     const browserSession = session.fromPartition(this.privateWindow ? 'drew-private-' + profile : profile === this.db.primaryProfile() ? 'persist:lexn-web' : 'persist:lexn-profile-' + profile)
     this.sessions.set(profile, browserSession)
     configurePermissions(browserSession, this.db, profile, this.changed)
+    this.refreshResourceRules(profile)
     this.observe(browserSession, profile)
     browserSession.extensions.on('extension-loaded', () => { if (!this.stopped) this.changed() })
     browserSession.extensions.on('extension-unloaded', () => { if (!this.stopped) this.changed() })
@@ -86,6 +87,15 @@ export class Downloads {
       void browserSession.extensions.loadExtension(path).catch(() => {})
     }
     return browserSession
+  }
+
+  refreshResourceRules(profile: string) {
+    const request = this.sessions.get(profile)?.webRequest
+    if (!request) return
+    const blocked = new Set(this.db.settings(profile).blockedResourceHosts.split(',').filter(Boolean))
+    if (!blocked.size) { request.onBeforeRequest(null); return }
+    request.onBeforeRequest({ urls: [...blocked].flatMap(host => ['http://' + host + '/*', 'https://' + host + '/*']) },
+      (details, callback) => callback({ cancel: details.resourceType !== 'mainFrame' }))
   }
 
   private extensionPaths(profile: string): string[] {

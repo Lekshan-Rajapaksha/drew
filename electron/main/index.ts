@@ -249,7 +249,10 @@ function createWindow(initialSpace?: string, initialUrl?: string, sessionId = wi
     opened.on('closed', () => { if (peek === opened) peek = null })
   }
   const notifyTab = (tab: Tab) => {
-    const profile = tabs.storageFor(tab.workspaceId)
+    // A startup navigation can emit updates during construction. The initial snapshot covers them.
+    const owner = windows.get(browser.id)
+    if (!owner) return
+    const profile = owner.tabs.storageFor(tab.workspaceId)
     for (const entry of windows.values()) {
       if (!entry.browser.isDestroyed() && (entry.browser === browser || entry.tabs.profileId === profile)) entry.browser.webContents.send('drew:tab-update', tab)
     }

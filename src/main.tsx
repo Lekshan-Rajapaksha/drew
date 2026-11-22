@@ -520,7 +520,7 @@ function Browser() {
         {splitVisible && <SplitView key={space.id} panes={splitTabs} layout={browser.split}
           resizePanes={weights => setSplitIds(splitIds, weights)}
           remove={id => setSplitIds(splitIds.filter(item => item !== id))} add={() => setPalette('split')} />}
-        {page === 'passwords' && <Passwords key={space.profileId ?? space.id} entries={browser.passwords} />}
+        {page === 'passwords' && <Passwords key={space.profileId ?? space.id} entries={browser.passwords} currentOrigin={activeUrl.startsWith('https://') ? new URL(activeUrl).origin : undefined} />}
         {page === 'extensions' && <div className="management">
           <header className="page-head"><span className="page-icon"><Puzzle size={24} /></span><div><h1>Extensions</h1><p>Extensions installed in this Profile</p></div>
             <button type="button" className="primary" onClick={() => { void command('loadExtension') }}>Load unpacked</button>

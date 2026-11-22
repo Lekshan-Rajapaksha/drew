@@ -12,6 +12,7 @@ import { detectSources, exportedLinks, readChromium, readImportFile, saveImporte
 import { chromiumProfile, markdownProfiles, saveBrowserProfiles } from './profileImport.js'
 import { copyPassword, importPasswords, savePassword } from './vault.js'
 import type { Downloads } from './profile.js'
+import { exportSpace, restoreSpace } from './workspaceBackup.js'
 import { checkForDrewUpdates } from './updates.js'
 
 export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow, otherWindowTabs: Tab[]): BrowserState {
@@ -109,6 +110,8 @@ export function bindIpc(
     newPrivateWindow,
     moveToWindow: value => moveToNewWindow(currentTab(value)),
     moveToSpace: (tab, space) => tabs.moveToSpace(currentTab(tab), id(space)),
+    exportSpaceBackup: () => exportSpace(window, db, tabs),
+    restoreSpaceBackup: () => restoreSpace(window, db, tabs),
     exportWorkspace: async () => {
       if (downloads.privateWindow) throw new Error('Workspace export is unavailable in private windows.')
       const escape = (text: string) => text.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!)
@@ -339,19 +342,22 @@ export function bindIpc(
           if (value !== '') throw new Error('Use the folder picker to set a download location.')
           db.setProfileSetting(profile, key, '')
           break
+        case 'keepAwakeHosts':
+        case 'blockedResourceHosts':
         case 'linkHosts': {
-          if (downloads.privateWindow) throw new Error('Link routing is unavailable in private windows.')
+          if (key === 'linkHosts' && downloads.privateWindow) throw new Error('Link routing is unavailable in private windows.')
           const hosts = [...new Set(text(value, 1024).split(/[,\s]+/).filter(Boolean).map(host => {
-            if (!/^[\p{L}\p{N}.-]+$/u.test(host) || !host.includes('.')) throw new Error('Enter website hostnames such as example.com.')
+            if (!/^[\p{L}\p{N}.-]+$/u.test(host) || (!host.includes('.') && host.toLowerCase() !== 'localhost')) throw new Error('Enter website hostnames such as example.com.')
             return new URL('https://' + host).hostname
           }))]
           for (const record of tabs.workspaces()) {
-            if (!record.profileId && record.id !== profile &&
+            if (key === 'linkHosts' && !record.profileId && record.id !== profile &&
                 db.settings(record.id).linkHosts.split(',').some(host => hosts.includes(host))) {
               throw new Error('A different Profile already routes one of these hostnames.')
             }
           }
           db.setProfileSetting(profile, key, hosts.join(','))
+          if (key === 'blockedResourceHosts') downloads.refreshResourceRules(profile)
           break
         }
         case 'memorySaver': db.setProfileSetting(profile, key, choice(value, ['off', '15', '30', '60'])); break
@@ -541,7 +547,7 @@ export function bindIpc(
   })))
   invoke('lexn:command', async (name, args) => {
     if (typeof name !== 'string' || !Object.hasOwn(commands, name) || !Array.isArray(args) || args.length > 5) throw new Error('Unknown command.')
-    if (downloads.privateWindow && ['saveLogin', 'loadExtension', 'checkForUpdates', 'defaultBrowser'].includes(name)) {
+    if (downloads.privateWindow && ['saveLogin', 'loadExtension', 'checkForUpdates', 'defaultBrowser', 'exportSpaceBackup', 'restoreSpaceBackup'].includes(name)) {
       throw new Error('This action is unavailable in private windows.')
     }
     await commands[name as keyof Commands](...args)
