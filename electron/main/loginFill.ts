@@ -8,9 +8,9 @@ import { unlockLogin } from './vault.js'
 const choosing = new WeakSet<WebContents>()
 
 function exchange(contents: WebContents, frame: WebFrameMain, stage: 'prepare' | 'apply', token: string, ...args: string[]) {
-  return new Promise<boolean>(resolve => {
+  return new Promise<boolean | 'password' | 'username'>(resolve => {
     const ipc = contents.ipc
-    const finish = (ok: boolean) => {
+    const finish = (ok: boolean | 'password' | 'username') => {
       clearTimeout(timer)
       contents.removeListener('did-start-navigation', navigation)
       contents.removeListener('destroyed', destroyed)
@@ -18,7 +18,8 @@ function exchange(contents: WebContents, frame: WebFrameMain, stage: 'prepare' |
       resolve(ok)
     }
     const reply = (event: IpcMainEvent, resultStage: unknown, replyToken: unknown, ok: unknown) => {
-      if (event.senderFrame === frame && resultStage === stage && replyToken === token) finish(ok === true)
+      if (event.senderFrame !== frame || resultStage !== stage || replyToken !== token) return
+      finish(stage === 'prepare' ? ok === 'password' || ok === 'username' ? ok : false : ok === true)
     }
     const navigation = (event: { isMainFrame: boolean; isSameDocument: boolean }) => {
       if (event.isMainFrame && !event.isSameDocument) finish(false)
@@ -49,19 +50,23 @@ export async function fillSavedLogin(db: Database, window: BrowserWindow, conten
   choosing.add(contents)
   try {
     const token = randomUUID()
-    if (!await exchange(contents, frame, 'prepare', token, origin) || !stillCurrent()) {
+    const mode = await exchange(contents, frame, 'prepare', token, origin)
+    if (!mode || !stillCurrent()) {
       if (offer) return
-      throw new Error('Focus the password field of a sign-in form and try again.')
+      throw new Error('Focus the username or password field of a sign-in form and try again.')
     }
-    const selected = !offer && logins.length === 1 ? logins[0] : await new Promise<SavedLogin | null>(resolve => {
-      const menu = Menu.buildFromTemplate(logins.map(login => ({
+    const matches = mode === 'username' ? logins.filter(login => login.username) : logins
+    if (!matches.length) return
+    const selected = !offer && matches.length === 1 ? matches[0] : await new Promise<SavedLogin | null>(resolve => {
+      const menu = Menu.buildFromTemplate(matches.map(login => ({
         label: 'Fill ' + (login.username.replace(/[\p{Cc}\p{Cf}]/gu, '').slice(0, 120) || 'saved login'),
         click: () => resolve(login),
       })))
       menu.popup({ window, callback: () => resolve(null) })
     })
     if (!selected || !stillCurrent()) return
-    const { username, password } = await unlockLogin(db, profile, selected.id, stillCurrent, origin)
+    const { username, password } = mode === 'username' ? { username: selected.username, password: '' }
+      : await unlockLogin(db, profile, selected.id, stillCurrent, origin)
     if (!stillCurrent()) return
     if (!await exchange(contents, frame, 'apply', token, origin, username, password)) {
       throw new Error('The sign-in form changed before Drew could fill it. Try again.')

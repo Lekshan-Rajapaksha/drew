@@ -86,7 +86,12 @@ export function DownloadsPage({ browser }: { browser: BrowserState }) {
       <div className="record-link"><strong>{item.name}</strong><span>{item.state} · {bytes(item.received)}{item.total > 0 ? ' / ' + bytes(item.total) : ''}</span>
         {item.state === 'progressing' && <progress aria-label={`Downloading ${item.name}`} value={item.total ? item.received : undefined} max={item.total || 1} />}
       </div>
-      {item.state === 'progressing' && <Tool label={`Cancel ${item.name}`} onClick={() => { void command('download', item.id, 'cancel') }}><X size={16} /></Tool>}
+      {(item.state === 'paused' || item.state === 'progressing') && <button type="button" className="secondary" onClick={() => {
+        void command('download', item.id, item.state === 'paused' ? 'resume' : 'pause')
+      }}>{item.state === 'paused' ? 'Resume' : 'Pause'}</button>}
+      {['cancelled', 'interrupted'].includes(item.state) && /^https?:/.test(item.url) &&
+        <button className="secondary" type="button" onClick={() => { void command('download', item.id, 'retry') }}>Retry</button>}
+      {(item.state === 'paused' || item.state === 'progressing') && <Tool label={`Cancel ${item.name}`} onClick={() => { void command('download', item.id, 'cancel') }}><X size={16} /></Tool>}
       {item.state === 'completed' && <>
         <Tool label={`Reveal ${item.name}`} onClick={() => { void command('download', item.id, 'reveal') }}><FolderOpen size={17} /></Tool>
         <Tool label={`Open ${item.name}`} onClick={() => { void command('download', item.id, 'open') }}><ExternalLink size={16} /></Tool>

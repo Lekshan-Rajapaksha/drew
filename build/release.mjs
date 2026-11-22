@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process'
-import { readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +23,13 @@ if (mac) {
     (env.APPLE_API_KEY && env.APPLE_API_KEY_ID && env.APPLE_API_ISSUER) || env.APPLE_KEYCHAIN_PROFILE
   if (!notarization) throw new Error('Configure Apple notarization credentials in the signing environment.')
 }
+const feed = new URL(env.DREW_UPDATE_URL ?? 'http://localhost')
+if (feed.protocol !== 'https:' || feed.username || feed.password || feed.search || feed.hash) {
+  throw new Error('Set DREW_UPDATE_URL to the HTTPS directory for the stable channel.')
+}
+if (!feed.pathname.endsWith('/')) feed.pathname += '/'
+const publisher = env.DREW_WINDOWS_PUBLISHER?.trim()
+if (windows && !publisher) throw new Error('Set DREW_WINDOWS_PUBLISHER to the Windows signing certificate publisher.')
 
 run(process.execPath, [env.npm_execpath, 'run', 'security:check'])
 run(process.execPath, [env.npm_execpath, 'run', 'typecheck'])
@@ -30,11 +37,20 @@ run(process.execPath, [env.npm_execpath, 'run', 'lint'])
 run(process.execPath, [env.npm_execpath, 'test'])
 run(process.execPath, [env.npm_execpath, 'run', 'test:desktop'])
 
-run(process.execPath, [
-  join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'),
-  ...(mac ? ['--mac', 'dmg', '--arm64', '--x64'] : ['--win', 'nsis', '--x64']),
-  '--config.forceCodeSigning=true', '--config.directories.output=' + output, '--publish', 'never',
-])
+const policy = join(root, 'out', 'electron', 'main', 'update-policy.json')
+writeFileSync(policy, JSON.stringify({
+  provider: 'generic', url: feed.href, updaterCacheDirName: 'drew-browser-updater',
+  ...(windows ? { publisherName: [publisher] } : {}),
+}))
+try {
+  run(process.execPath, [
+    join(root, 'node_modules', 'electron-builder', 'out', 'cli', 'cli.js'),
+    ...(mac ? ['--mac', 'dmg', 'zip', '--arm64', '--x64'] : ['--win', 'nsis', '--x64', '--config.win.signtoolOptions.publisherName=' + publisher]),
+    '--config.forceCodeSigning=true', '--config.directories.output=' + output,
+    '--config.publish.provider=generic', '--config.publish.url=' + feed.href, '--publish', 'never',
+  ])
+} finally { rmSync(policy, { force: true }) }
+if (!existsSync(join(output, mac ? 'latest-mac.yml' : 'latest.yml'))) throw new Error('The stable update manifest is missing.')
 
 if (mac) {
   for (const arch of ['arm64', 'x64']) {

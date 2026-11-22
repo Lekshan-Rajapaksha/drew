@@ -4,15 +4,20 @@ import { SIDEBAR_INSET, SIDEBAR_RADIUS, SIDEBAR_VERTICAL_GAP } from '../../share
 export class FloatingSidebar {
   private view: WebContentsView | null = null
   private width = 0
+  private height = 0
+  private placed: { x: number; width: number; height: number } | undefined
   private x = 0
   private target = 0
   private frame: ReturnType<typeof setTimeout> | undefined
 
-  constructor(private window: BrowserWindow, private wireKeys: (contents: WebContentsView['webContents']) => void) {}
+  constructor(private window: BrowserWindow, private wireKeys: (contents: WebContentsView['webContents']) => void) {
+    this.height = window.getContentSize()[1]
+  }
 
   create(options: WebContentsViewConstructorOptions) {
     const view = new WebContentsView(options)
     this.view = view
+    this.placed = undefined
     view.setBackgroundColor('#00000000')
     view.setBorderRadius(SIDEBAR_RADIUS)
     view.setVisible(false)
@@ -84,7 +89,11 @@ export class FloatingSidebar {
     tick()
   }
 
-  resize() { this.position() }
+  resize() {
+    if (this.window.isDestroyed()) return
+    this.height = this.window.getContentSize()[1]
+    this.position()
+  }
 
   dispose() {
     this.stop()
@@ -93,11 +102,11 @@ export class FloatingSidebar {
 
   private position() {
     if (!this.view || !this.width || this.window.isDestroyed()) return
-    const [, height] = this.window.getContentSize()
-    this.view.setBounds({
-      x: Math.round(this.x), y: SIDEBAR_VERTICAL_GAP,
-      width: this.width - 2 * SIDEBAR_INSET, height: height - 2 * SIDEBAR_VERTICAL_GAP,
-    })
+    const placement = { x: Math.round(this.x), width: this.width - 2 * SIDEBAR_INSET,
+      height: Math.max(0, this.height - 2 * SIDEBAR_VERTICAL_GAP) }
+    if (this.placed?.x === placement.x && this.placed.width === placement.width && this.placed.height === placement.height) return
+    this.placed = placement
+    this.view.setBounds({ ...placement, y: SIDEBAR_VERTICAL_GAP })
   }
 
   private stop() {

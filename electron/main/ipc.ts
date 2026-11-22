@@ -1,5 +1,6 @@
+import { writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
-import { app, dialog, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
+import { app, dialog, powerMonitor, shell, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
 import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type SavedTab, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
@@ -11,6 +12,7 @@ import { detectSources, exportedLinks, readChromium, readImportFile, saveImporte
 import { chromiumProfile, markdownProfiles, saveBrowserProfiles } from './profileImport.js'
 import { copyPassword, importPasswords, savePassword } from './vault.js'
 import type { Downloads } from './profile.js'
+import { checkForDrewUpdates } from './updates.js'
 
 export function browserState(db: Database, tabs: Tabs, downloads: Downloads, window: BrowserWindow, otherWindowTabs: Tab[]): BrowserState {
   const profile = tabs.profileId
@@ -22,7 +24,10 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads, win
     return [id, { size, settings: { theme, accentColor, accentEnd, topToolbar, keyboardShortcuts },
       favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id) }] as const
   }))
+  const batterySaver = db.settings(profile).batterySaver
   return {
+    privateWindow: downloads.privateWindow,
+    batterySaving: batterySaver === 'on' || (batterySaver === 'battery' && powerMonitor.onBatteryPower),
     appVersion: app.getVersion(),
     welcomePending: db.get('welcomePending', false),
     windowMaximized: window.isMaximized(),
@@ -35,7 +40,7 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads, win
       groups: groups.filter(group => group.workspaceId === space.id),
     }])),
     otherWindowTabs,
-    archived: db.all<ArchivedTab>('SELECT id, url, title, archivedAt FROM archived_tabs WHERE workspaceId = ? ORDER BY archivedAt DESC LIMIT 150', tabs.workspaceId), workspaces, tabs: localTabs.filter(tab => tab.workspaceId === tabs.workspaceId),
+    canUndoClear: tabs.canUndoClear, split: tabs.split, workspaces, tabs: localTabs.filter(tab => tab.workspaceId === tabs.workspaceId),
     groups: groups.filter(group => group.workspaceId === tabs.workspaceId),
     bookmarks: db.all<Bookmark>('SELECT id, title, url, folderId FROM bookmarks WHERE workspaceId = ? ORDER BY rowid DESC', profile),
     folders: db.all<Folder>('SELECT id, name FROM bookmark_folders WHERE workspaceId = ? ORDER BY name', profile),
@@ -87,9 +92,11 @@ function boolean(value: unknown) {
 
 export function bindIpc(
   window: BrowserWindow, uiUrl: string, db: Database, tabs: Tabs,
-  downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll: () => boolean, newWindow: () => void,
+  downloads: Downloads, changed: () => void, sidebar: FloatingSidebar, nativeSpaceScroll: () => boolean, newWindow: () => void, newPrivateWindow: () => void, moveToNewWindow: (id: string) => Promise<void>,
   peerTabs: () => Tab[], focusWindowTab: (tabId: string) => void,
   registerImported: (tabs: SavedTab[]) => void,
+  resetProfile: (profile: string) => void,
+  clearProfileStorage: (profile: string, clear: () => Promise<void>) => Promise<void>,
 ) {
   const state = () => browserState(db, tabs, downloads, window, peerTabs())
   const currentTab = (value: unknown) => {
@@ -99,6 +106,54 @@ export function bindIpc(
   }
   const commands: { [K in keyof Commands]: (...args: unknown[]) => void | Promise<void> } = {
     newWindow,
+    newPrivateWindow,
+    moveToWindow: value => moveToNewWindow(currentTab(value)),
+    moveToSpace: (tab, space) => tabs.moveToSpace(currentTab(tab), id(space)),
+    exportWorkspace: async () => {
+      if (downloads.privateWindow) throw new Error('Workspace export is unavailable in private windows.')
+      const escape = (text: string) => text.replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!)
+      const links = (items: { title: string; url: string }[]) => items.flatMap(({ title, url }) =>
+        webUrl(url) ? ['<DT><A HREF="' + escape(url) + '">' + escape(title) + '</A>'] : []).join('\n')
+      const space = tabs.workspaces().find(item => item.id === tabs.workspaceId)!
+      const profile = tabs.profileId
+      const sections = [
+        ['Bookmarks', db.all<Bookmark>('SELECT title, url FROM bookmarks WHERE workspaceId = ?', profile)],
+        ['Favorites', db.all<Favorite>('SELECT title, url FROM favorites WHERE profileId = ? ORDER BY position', profile)],
+        ['Pinned tabs', tabs.list().filter(tab => tab.workspaceId === space.id && tab.pinned)],
+        ['Open tabs', tabs.list().filter(tab => tab.workspaceId === space.id && !tab.pinned)],
+      ] as const
+      const { canceled, filePath } = await dialog.showSaveDialog(window, { defaultPath: 'Drew workspace.html', filters: [{ name: 'Bookmarks HTML', extensions: ['html'] }] })
+      if (canceled || !filePath) return
+      const body = sections.map(([name, items]) => '<DT><H3>' + name + '</H3>\n<DL><p>\n' + links([...items]) + '\n</DL><p>').join('\n')
+      await writeFile(filePath, '<!DOCTYPE NETSCAPE-Bookmark-file-1>\n<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">\n<TITLE>' +
+        escape(space.name) + '</TITLE>\n<H1>' + escape(space.name) + '</H1>\n<DL><p>\n' + body + '\n</DL><p>\n', { mode: 0o600 })
+    },
+    checkForUpdates: () => checkForDrewUpdates(),
+    defaultBrowser: async () => {
+      if (!app.isPackaged) throw new Error('Install Drew before setting it as your default browser.')
+      if (process.platform === 'win32') await shell.openExternal('ms-settings:defaultapps')
+      else if (process.platform === 'darwin') {
+        app.setAsDefaultProtocolClient('http')
+        app.setAsDefaultProtocolClient('https')
+      } else throw new Error('Use your system settings to choose the default browser.')
+    },
+    findPage: (query, direction) => tabs.find(text(query, 512), direction === undefined ? undefined : choice(direction, ['next', 'previous'] as const)),
+    pageZoom: direction => tabs.zoom(choice(direction, ['in', 'out', 'reset'])),
+    printPage: () => tabs.print(),
+    savePagePdf: () => tabs.savePdf(),
+    sleepTab: value => {
+      if (!tabs.sleep(currentTab(value))) throw new Error('This tab is active, still loading, or needs to stay awake.')
+    },
+    siteInfo: async () => {
+      const tab = tabs.active()?.state
+      const origin = tab && originOf(tab.url)
+      if (!origin) return
+      await dialog.showMessageBox(window, {
+        type: origin.startsWith('https:') && !tab.error ? 'info' : 'warning',
+        message: origin,
+        detail: tab.error ? 'The page failed to load.' : origin.startsWith('https:') ? 'Connection uses HTTPS.' : 'Connection is unencrypted HTTP.',
+      })
+    },
     home: () => tabs.home(),
     setNavigationLayout: value => {
       const layout = choice(value, ['sidebar', 'compact', 'top'])
@@ -200,11 +255,25 @@ export function bindIpc(
       else tabs.create(item.url)
     },
     archiveTabs: () => tabs.archive(),
-    restoreArchived: value => {
-      const item = db.one<ArchivedTab>('SELECT * FROM archived_tabs WHERE id = ? AND workspaceId = ?', id(value), tabs.workspaceId)
-      if (!item) return
-      tabs.create(item.url)
-      db.run('DELETE FROM archived_tabs WHERE id = ?', item.id)
+    restoreArchived: value => tabs.restoreArchive([id(value)]),
+    restoreArchivedTabs: values => {
+      if (!Array.isArray(values) || values.length > 200) throw new Error('Select up to 200 archived tabs.')
+      tabs.restoreArchive([...new Set(values.map(id))])
+    },
+    undoClear: () => tabs.undoClear(),
+    setSplit: (space, values) => {
+      if (!Array.isArray(values) || values.length > 4) throw new Error('Invalid split layout.')
+      const panes = values.map(value => {
+        if (!value || typeof value !== 'object') throw new Error('Invalid split pane.')
+        const { weight } = value
+        if (typeof weight !== 'number' || !Number.isFinite(weight) || weight <= 0 || weight > 50) throw new Error('Invalid split weight.')
+        return { id: id(value.id), weight }
+      })
+      if (new Set(panes.map(pane => pane.id)).size !== panes.length) throw new Error('Duplicate split pane.')
+      const spaceId = id(space)
+      if (spaceId !== tabs.workspaceId) return
+      for (const pane of panes) currentTab(pane.id)
+      tabs.setSplit(spaceId, panes)
     },
     removeGroup: group => {
       const key = id(group)
@@ -240,7 +309,7 @@ export function bindIpc(
     addFolder: name => { db.run('INSERT INTO bookmark_folders VALUES (?, ?, ?)', randomUUID(), required(name, 64), tabs.profileId) },
     deleteFolder: value => { db.run('DELETE FROM bookmark_folders WHERE id = ? AND workspaceId = ?', id(value), tabs.profileId) },
     deleteVisit: value => { db.run('DELETE FROM history WHERE id = ? AND workspaceId = ?', id(value), tabs.profileId) },
-    download: (value, action) => downloads.action(tabs.profileId, id(value), choice(action, ['open', 'reveal', 'cancel']), window),
+    download: (value, action) => downloads.action(tabs.profileId, id(value), choice(action, ['open', 'reveal', 'cancel', 'pause', 'resume', 'retry']), window),
     setSetting: (key, value) => {
       const profile = tabs.profileId
       switch (key) {
@@ -270,6 +339,23 @@ export function bindIpc(
           if (value !== '') throw new Error('Use the folder picker to set a download location.')
           db.setProfileSetting(profile, key, '')
           break
+        case 'linkHosts': {
+          if (downloads.privateWindow) throw new Error('Link routing is unavailable in private windows.')
+          const hosts = [...new Set(text(value, 1024).split(/[,\s]+/).filter(Boolean).map(host => {
+            if (!/^[\p{L}\p{N}.-]+$/u.test(host) || !host.includes('.')) throw new Error('Enter website hostnames such as example.com.')
+            return new URL('https://' + host).hostname
+          }))]
+          for (const record of tabs.workspaces()) {
+            if (!record.profileId && record.id !== profile &&
+                db.settings(record.id).linkHosts.split(',').some(host => hosts.includes(host))) {
+              throw new Error('A different Profile already routes one of these hostnames.')
+            }
+          }
+          db.setProfileSetting(profile, key, hosts.join(','))
+          break
+        }
+        case 'memorySaver': db.setProfileSetting(profile, key, choice(value, ['off', '15', '30', '60'])); break
+        case 'batterySaver': db.setProfileSetting(profile, key, choice(value, ['off', 'on', 'battery'])); break
         case 'archiveHours': db.setProfileSetting(profile, key, choice(value, ['0', '12', '24', '72', '168'])); break
         case 'favoriteSize': db.setProfileSetting(profile, key, choice(value, ['small', 'medium', 'large'])); break
         case 'notificationPolicy': db.setProfileSetting(profile, key, choice(value, ['approved', 'block'])); break
@@ -284,7 +370,7 @@ export function bindIpc(
         case 'javascript':
           if (boolean(value) !== db.settings(profile).javascript) {
             db.setProfileSetting(profile, key, boolean(value))
-            tabs.resetRenderers(profile)
+            resetProfile(profile)
           }
           break
         default: throw new Error('Unknown setting.')
@@ -302,10 +388,7 @@ export function bindIpc(
         case 'history': db.run('DELETE FROM history WHERE workspaceId = ?', id); break
         case 'cookies': await profile.clearStorageData({ storages: ['cookies'] }); break
         case 'cache': await profile.clearCache(); break
-        case 'storage':
-          await profile.clearData()
-          tabs.resetRenderers(id)
-          break
+        case 'storage': await clearProfileStorage(id, () => profile.clearData()); break
       }
     },
     setPermission: (value, key, mode) => {
@@ -362,9 +445,17 @@ export function bindIpc(
   invoke('lexn:state', state)
   invoke('lexn:uses-native-space-scroll', nativeSpaceScroll)
   invoke('lexn:history', query => db.history(text(query), tabs.profileId))
+  invoke('lexn:archive', (query, offset) => {
+    if (typeof offset !== 'number' || !Number.isSafeInteger(offset) || offset < 0) throw new Error('Invalid archive offset.')
+    const pattern = '%' + text(query).replace(/[\\%_]/g, '\\$&') + '%'
+    return db.all<ArchivedTab>(`SELECT id, url, title, archivedAt FROM archived_tabs
+      WHERE workspaceId = ? AND (title LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\')
+      ORDER BY archivedAt DESC, id DESC LIMIT 100 OFFSET ?`, tabs.workspaceId, pattern, pattern, offset)
+  })
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
   invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label, browser }) => ({ id, label, browser })))
-  invoke('lexn:import-browser', async (value, selected) => {
+  invoke('lexn:import-browser', async (value, selected, review) => {
+    if (downloads.privateWindow) throw new Error('Import is unavailable in private windows.')
     const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords', 'profiles', 'profile-folder', 'profile-markdown'])
     const profile = kind === 'passwords' && selected !== undefined ? id(selected) : tabs.profileId
     const passwordProfile = kind === 'passwords' ? db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ? AND profileId IS NULL', profile) : undefined
@@ -372,8 +463,25 @@ export function bindIpc(
       throw new Error('Choose a Drew Profile for these passwords.')
     }
     const brand = () => choice(selected, ['Chrome', 'Arc', 'Dia', 'Ardia', 'Opera', 'Opera GX', 'Edge', 'Brave', 'Vivaldi', 'Chromium'] as const)
-    const saveProfiles = (profiles: Parameters<typeof saveBrowserProfiles>[1]) => {
-      if (window.isDestroyed()) return null
+    const confirmImport = async (detail: string) => {
+      if (window.isDestroyed()) return false
+      if (review !== true) return true
+      const { response } = await dialog.showMessageBox(window, {
+        title: 'Drew import', type: 'question', message: 'Review browser data before importing',
+        detail, buttons: ['Import', 'Cancel'], defaultId: 0, cancelId: 1, noLink: true,
+      })
+      return response === 0 && !window.isDestroyed()
+    }
+    const saveProfiles = async (profiles: Parameters<typeof saveBrowserProfiles>[1]) => {
+      const summary = profiles.slice(0, 12).map(source => {
+        const saved = db.get('browser-import:' + source.key, '')
+        const destination = db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ? AND profileId IS NULL', saved)?.name
+        return (destination ? destination + ' (existing Profile)' : source.name + ' (new Profile)') + '\n' +
+          source.bookmarks.length + ' bookmarks, ' + source.history.length + ' history entries, ' +
+          source.favorites.length + ' Favorites, ' + source.pinned.length + ' pinned tabs, ' + source.tabs.length + ' open tabs'
+      }).join('\n\n')
+      if (!await confirmImport(summary + (profiles.length > 12 ? '\n\nAdditional Profiles: ' + (profiles.length - 12) : '') +
+          '\n\nDuplicates are skipped. Passwords are imported separately.')) return null
       const { results, createdTabs } = saveBrowserProfiles(db, profiles)
       registerImported(createdTabs)
       changed()
@@ -421,7 +529,9 @@ export function bindIpc(
     const imported = kind === 'bookmarks'
       ? { links: exportedLinks(await readImportFile(path), /\.md$/i.test(path)), history: [], notes: [] }
       : await readChromium(path)
-    if (window.isDestroyed()) return null
+    const target = db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ?', profile)?.name ?? 'Current Profile'
+    if (!await confirmImport(target + '\n' + imported.links.length + ' bookmark links, ' + imported.history.length +
+        ' history entries. Duplicates are skipped.')) return null
     const saved = saveImported(db, profile, imported.links, imported.history)
     changed()
     return { ...saved, passwords: 0, notes: imported.notes }
@@ -431,8 +541,11 @@ export function bindIpc(
   })))
   invoke('lexn:command', async (name, args) => {
     if (typeof name !== 'string' || !Object.hasOwn(commands, name) || !Array.isArray(args) || args.length > 5) throw new Error('Unknown command.')
+    if (downloads.privateWindow && ['saveLogin', 'loadExtension', 'checkForUpdates', 'defaultBrowser'].includes(name)) {
+      throw new Error('This action is unavailable in private windows.')
+    }
     await commands[name as keyof Commands](...args)
-    changed()
+    if (!['findPage', 'pageZoom', 'printPage', 'siteInfo', 'sleepTab', 'savePagePdf'].includes(name)) changed()
   })
   const layout = (event: IpcMainEvent, value: unknown) => {
     if (!trusted(event)) return
@@ -457,7 +570,7 @@ export function bindIpc(
   ipc.on('lexn:layout', layout)
   const layoutSidebar = (event: IpcMainEvent, width: unknown, open: unknown, animate: unknown) => {
     if (!trusted(event) || typeof width !== 'number' || !Number.isInteger(width) ||
-        (width !== 0 && (width < 242 || width > 360)) || typeof open !== 'boolean' || typeof animate !== 'boolean') return
+        (width !== 0 && width !== 76 && (width < 242 || width > 360)) || typeof open !== 'boolean' || typeof animate !== 'boolean') return
     sidebar.layout(width, open, animate)
   }
   ipc.on('lexn:sidebar-layout', layoutSidebar)

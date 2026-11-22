@@ -135,6 +135,17 @@ const migrations = [
     WHERE true
     ON CONFLICT(key) DO UPDATE SET value = excluded.value;
   `,
+  `
+  CREATE TABLE browser_windows (
+    id TEXT PRIMARY KEY, space TEXT NOT NULL, active TEXT NOT NULL, splits TEXT NOT NULL,
+    open INTEGER NOT NULL DEFAULT 1, bounds TEXT
+  );
+  ALTER TABLE tabs ADD COLUMN windowId TEXT NOT NULL DEFAULT 'main';
+  CREATE INDEX tabs_window ON tabs(windowId, workspaceId, position);
+  ALTER TABLE archived_tabs ADD COLUMN batch TEXT;
+  ALTER TABLE archived_tabs ADD COLUMN windowId TEXT;
+  CREATE INDEX archived_space_time ON archived_tabs(workspaceId, archivedAt DESC, id);
+  `,
 ]
 
 type Value = string | number | null
@@ -171,7 +182,7 @@ export class Database {
           }
           this.set('welcomePending', true)
         }
-        this.run("UPDATE downloads SET state = 'interrupted' WHERE state = 'progressing'")
+        this.run("UPDATE downloads SET state = 'interrupted' WHERE state IN ('progressing', 'paused')")
       })
     } catch (error) {
       this.db.close()

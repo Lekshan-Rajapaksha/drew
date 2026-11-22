@@ -48,7 +48,7 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
     setStatus('')
     try {
       const value = kind === 'browser' ? selected : kind === 'passwords' ? destination : brand
-      const result = await window.lexn.importBrowserData(kind, value)
+      const result = await window.lexn.importBrowserData(kind, value, true)
       if (!result) return
       if (result.profiles?.length) setDestination(result.profiles.length === 1 ? result.profiles[0].id : '')
       const notes = [...result.notes]

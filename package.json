@@ -1,7 +1,7 @@
 {
   "name": "drew-browser",
   "productName": "Drew",
-  "version": "0.6.2",
+  "version": "0.7.0",
   "description": "A workspace-oriented desktop browser",
   "author": "Drew contributors",
   "private": true,
@@ -26,6 +26,7 @@
     "dist:mac:x64": "npm run build && electron-builder --mac --x64"
   },
   "dependencies": {
+    "electron-updater": "6.8.11",
     "lucide-react": "1.48.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
@@ -104,7 +105,8 @@
       "icon": "build/icon.png"
     },
     "nsis": {
-      "artifactName": "Drew-Setup-${version}-${arch}.${ext}"
+      "artifactName": "Drew-Setup-${version}-${arch}.${ext}",
+      "include": "build/installer.nsh"
     },
     "asarUnpack": [
       "out/native/*.node"

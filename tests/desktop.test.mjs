@@ -31,7 +31,7 @@ async function waitUntil(callback, message, milliseconds = 10000) {
 
 async function shellPage(app) {
   return waitUntil(() => app.context().pages().find(page => page.url() === 'lexn://shell/index.html'),
-    'LexN shell window did not load')
+    'LexN shell window did not load', 30000)
 }
 
 async function go(page, url) {
@@ -66,11 +66,11 @@ async function shortcut(app, keyCode, modifiers) {
 }
 
 async function pointAt(app, x) {
-  await app.evaluate(({ BrowserWindow, screen }, x) => {
+  await app.evaluate(({ BrowserWindow }, x) => {
     const win = BrowserWindow.getAllWindows().find(window => window.webContents.getURL().startsWith('lexn://shell'))
     const bounds = win.getContentBounds()
-    screen.getCursorScreenPoint = () => ({ x: bounds.x + x, y: bounds.y + 220 })
     win.focus()
+    win.webContents.emit('before-mouse-event', {}, { type: 'mouseMove', x, y: 220, globalX: bounds.x + x, globalY: bounds.y + 220 })
   }, x)
 }
 
@@ -88,6 +88,10 @@ function serve(request, response) {
     case '/favicon.ico':
       response.writeHead(200, { 'Content-Type': 'image/png' })
       response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/r1cAAAAASUVORK5CYII=', 'base64'))
+      break
+    case '/preview-redirect':
+      response.writeHead(302, { Location: 'http://localhost:' + request.socket.localPort + '/preview-destination' })
+      response.end()
       break
     default: {
       const title = request.url === '/two' ? 'LexN Fixture Two' : 'LexN Fixture One'
@@ -616,14 +620,22 @@ test('desktop browser renders Chromium pages, downloads files, and restores its 
       .executeJavaScript('document.getElementById("blank").click()', true)
   })
   await waitUntil(async () => app.evaluate(({ BrowserWindow }) =>
-    BrowserWindow.getAllWindows().some(win => win.isModal() && win.webContents.getURL().startsWith('http:') && !win.webContents.isLoading())), 'pinned link did not open a peek window')
-  await app.evaluate(({ BrowserWindow }) => {
-    const view = BrowserWindow.getAllWindows().find(win => win.isModal() && win.webContents.getURL().startsWith('http:'))
-    view.focus()
-    view.webContents.focus()
-    view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Enter', modifiers: [process.platform === 'darwin' ? 'meta' : 'control'] })
-  })
-  await waitUntil(async () => (await active(page)).id !== one.id, 'peek was not promoted to a full tab')
+    BrowserWindow.getAllWindows().some(win => win.isModal() && win.contentView.children.some(view =>
+      view.webContents?.getURL().startsWith('http:') && !view.webContents.isLoading()))), 'pinned link did not open a peek window')
+  const peekChrome = await waitUntil(() => app.context().pages().find(tab => tab.url().startsWith('data:text/html;charset=utf-8,')),
+    'the trusted preview strip did not load')
+  await peekChrome.getByText('Unencrypted HTTP', { exact: true }).waitFor()
+  assert.equal(await peekChrome.locator('#origin').textContent(), origin)
+  await app.evaluate(({ BrowserWindow }, origin) => {
+    const modal = BrowserWindow.getAllWindows().find(win => win.isModal() && win.webContents.getURL().startsWith('data:'))
+    return modal.contentView.children.find(view => view.webContents?.getURL().startsWith(origin)).webContents
+      .loadURL(origin + '/preview-redirect')
+  }, origin)
+  const redirectedOrigin = origin.replace('127.0.0.1', 'localhost')
+  await peekChrome.getByText(redirectedOrigin, { exact: true }).waitFor()
+  assert.equal(await peekChrome.locator('#origin').getAttribute('title'), redirectedOrigin + '/preview-destination')
+  await peekChrome.getByRole('button', { name: 'Open in full tab' }).click()
+  await waitUntil(async () => (await active(page)).url === redirectedOrigin + '/preview-destination', 'peek did not promote the redirected address')
 
   const extraPanes = []
   for (let index = 1; index <= 3; index++) {
@@ -765,6 +777,7 @@ test('Drew imports links, switches navigation layouts, and links same-Profile ta
   const position = await footer.boundingBox()
   await footer.dispatchEvent('wheel', { deltaX: 30, deltaY: 0 })
   const incoming = page.locator('.sidebar-swipe-next')
+  await incoming.waitFor()
   assert.equal(await incoming.locator('[aria-label="Work favorite"]').count(), 1)
   assert.equal(await incoming.locator('.spatial-header').count(), 1)
   assert.equal(await incoming.locator('.spatial-footer').count(), 0)
@@ -856,12 +869,19 @@ test('saved logins fill eligible HTTPS forms on demand and websites have context
   const cert = join(dir, 'test-cert.pem')
   execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' })
   const server = createSecureServer({ key: await readFile(key), cert: await readFile(cert) }, (request, response) => {
+    const usernameOnly = request.url === '/username'
     const action = request.url === '/cross-origin' ? 'https://example.invalid/signin' : '/signin'
     response.setHeader('Content-Type', 'text/html')
+    if (request.url === '/auth-window') {
+      response.end('<!doctype html><title>Untrusted page title</title><script>window.opener?.postMessage("signed-in", location.origin);</script>')
+      return
+    }
     response.end(`<!doctype html><title>Drew Autofill Fixture</title><h1>Sign in</h1>
       <a id="fixture-link" href="/linked">Fixture Link</a>
       <form action="${action}" method="post"><input id="user" name="username" autocomplete="username">
-      <input id="pass" name="password" type="password" autocomplete="current-password"><button>Sign in</button></form>`)
+      ${usernameOnly ? '' : '<input id="pass" name="password" type="password" autocomplete="current-password">'}<button>Sign in</button></form>
+      <button id="sign-in-popup" onclick="window.open('/auth-window', 'drew-fixture-auth', 'popup,width=560,height=580')">Open sign-in window</button>
+      <script>addEventListener('message', e => { if (e.origin === location.origin) window.fixtureSignIn = e.data })</script>`)
   })
   await new Promise((resolve, reject) => server.once('error', reject).listen(0, '127.0.0.1', resolve))
   const origin = 'https://127.0.0.1:' + server.address().port
@@ -899,8 +919,9 @@ test('saved logins fill eligible HTTPS forms on demand and websites have context
   await waitUntil(async () => (await active(page)).title === 'Drew Autofill Fixture' && await activeView(app) === origin + '/signin',
     'the HTTPS login fixture did not open')
   const inspect = expression => app.evaluate(({ BrowserWindow }, { origin, expression }) => {
-    const win = BrowserWindow.getAllWindows()[0]
-    const view = win.contentView.children.flatMap(child => child.children).find(child => child.webContents?.getURL().startsWith(origin))
+    const view = BrowserWindow.getAllWindows()
+      .flatMap(win => win.contentView.children.flatMap(child => child.children))
+      .find(child => child.webContents?.getURL().startsWith(origin))
     return view.webContents.executeJavaScript(expression)
   }, { origin, expression })
   const values = () => inspect("[document.querySelector('#user').value, document.querySelector('#pass').value, typeof window.lexn]")
@@ -940,6 +961,185 @@ test('saved logins fill eligible HTTPS forms on demand and websites have context
   await waitUntil(async () => await activeView(app) === origin + '/cross-origin' && (await active(page)).loading === false, 'unsafe form fixture did not load')
   await assert.rejects(page.evaluate(() => window.lexn.command('fillLogin')), /sign-in form/)
   assert.deepEqual(await values(), ['', '', 'undefined'])
+  await page.evaluate(({ id, origin }) => window.lexn.command('navigate', id, origin + '/username'), { id: tab.id, origin })
+  await waitUntil(async () => await activeView(app) === origin + '/username' && !(await active(page)).loading, 'username step did not load')
+  await click('#user', 'left', true)
+  await waitUntil(async () => await inspect("document.querySelector('#user').value") === 'alice', 'username-only autofill failed')
+  await click('#sign-in-popup', 'left')
+  await waitUntil(async () => await inspect('window.fixtureSignIn') === 'signed-in', 'the HTTPS popup did not retain its opener')
+  await waitUntil(() => app.evaluate(({ BrowserWindow }, origin) => BrowserWindow.getAllWindows().some(win =>
+    win.webContents.getURL() === origin + '/auth-window' && win.getTitle() === 'Drew · ' + origin), origin),
+  'the sign-in window did not display the browser-controlled origin')
+})
+
+test('privacy resets reach shared windows and recovery restores archived tabs and split layouts', { timeout: 120000 }, async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'drew-recovery-'))
+  const server = createServer(serve)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = 'http://127.0.0.1:' + server.address().port
+  let app
+  t.after(async () => {
+    await app?.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(dir, { recursive: true, force: true })
+  })
+  const launch = () => electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: dir } })
+  app = await launch()
+  const shell = () => app.context().pages().filter(page => page.url() === 'lexn://shell/index.html')
+  const first = await shellPage(app)
+  await first.evaluate(() => window.lexn.command('finishWelcome'))
+  const personal = (await getState(first)).workspaceId
+  const work = (await getState(first)).workspaces[1].id
+  const create = async (page, pathname) => {
+    await page.evaluate(url => window.lexn.command('newTab', url), origin + pathname)
+    return waitUntil(async () => { const tab = await active(page); return tab?.url === origin + pathname && !tab.loading && tab }, 'test tab did not load')
+  }
+  const newWindow = async () => {
+    const before = shell()
+    await first.evaluate(() => window.lexn.command('newWindow'))
+    return waitUntil(() => shell().find(page => !before.includes(page)), 'another window did not load')
+  }
+  const firstTab = await create(first, '/first')
+  const second = await newWindow()
+  const secondTab = await create(second, '/second')
+  const third = await newWindow()
+  await third.evaluate(id => window.lexn.command('workspace', id), work)
+  const thirdTab = await create(third, '/work')
+  await second.evaluate(id => window.lexn.command('pinTab', id), secondTab.id)
+  await app.evaluate(({ BrowserWindow }, url) => {
+    const view = BrowserWindow.getAllWindows().flatMap(win => win.contentView.children.flatMap(child => child.children))
+      .find(child => child.webContents?.getURL() === url)
+    return view.webContents.executeJavaScript('document.getElementById("blank").click()', true)
+  }, secondTab.url)
+  const previewOpen = () => app.evaluate(({ BrowserWindow }) =>
+    BrowserWindow.getAllWindows().some(win => win.isModal() && win.webContents.getURL().startsWith('data:')))
+  await waitUntil(previewOpen, 'the shared Profile link preview did not open')
+  const renderers = () => app.evaluate(({ webContents }, origin) => Object.fromEntries(webContents.getAllWebContents()
+    .filter(contents => contents.getURL().startsWith(origin))
+    .map(contents => [new URL(contents.getURL()).pathname, { id: contents.id, js: contents.getLastWebPreferences().javascript }])), origin)
+  const before = await renderers()
+  await first.evaluate(() => window.lexn.command('setSetting', 'javascript', false))
+  const disabled = await waitUntil(async () => {
+    const views = await renderers()
+    return views['/first']?.js === false && views['/second']?.js === false && views['/work']?.js === true && views
+  }, 'Profile JavaScript was left enabled in a peer window')
+  assert.deepEqual(disabled['/work'], before['/work'])
+  await waitUntil(async () => !(await previewOpen()), 'the shared Profile preview kept its previous JavaScript policy')
+  await second.evaluate(id => window.lexn.command('pinTab', id), secondTab.id)
+  await first.evaluate(() => window.lexn.command('clearData', 'storage'))
+  await waitUntil(async () => {
+    const views = await renderers()
+    return views['/first']?.id && views['/first'].id !== disabled['/first'].id &&
+      views['/second']?.id && views['/second'].id !== disabled['/second'].id && views['/work']?.id === before['/work'].id
+  }, 'clearing Profile data did not refresh exactly the two shared windows')
+
+  const next = await create(first, '/split')
+  const split = [{ id: firstTab.id, weight: 1.4 }, { id: next.id, weight: .6 }]
+  await first.evaluate(({ personal, split }) => window.lexn.command('setSplit', personal, split), { personal, split })
+  await first.locator('.split-pane').first().waitFor()
+  await second.evaluate(() => window.lexn.command('archiveTabs'))
+  const archived = await second.evaluate(() => window.lexn.archive('second', 0))
+  assert.equal(archived.length, 1)
+  assert.equal((await getState(first)).canUndoClear, false)
+  await second.evaluate(() => window.lexn.command('undoClear'))
+  assert.equal((await active(second)).url, secondTab.url)
+  assert.deepEqual(await second.evaluate(() => window.lexn.archive('second', 0)), [])
+  const db = new DatabaseSync(join(dir, 'lexn.sqlite'))
+  const archiveIds = Array.from({ length: 155 }, () => randomUUID())
+  try {
+    const insert = db.prepare('INSERT INTO archived_tabs (id, workspaceId, url, title, archivedAt) VALUES (?, ?, ?, ?, ?)')
+    for (const [index, id] of archiveIds.entries()) insert.run(id, work, origin + '/archive-' + index, 'Archive ' + index, index)
+  } finally { db.close() }
+  assert.equal((await third.evaluate(() => window.lexn.archive('', 100))).length, 55)
+  assert.equal((await third.evaluate(() => window.lexn.archive('Archive 0', 0)))[0].id, archiveIds[0])
+  assert.deepEqual(await first.evaluate(() => window.lexn.archive('Archive 0', 0)), [])
+  await third.evaluate(ids => window.lexn.command('restoreArchivedTabs', ids), archiveIds.slice(0, 2))
+  assert.ok((await getState(third)).tabs.some(tab => tab.url === origin + '/archive-0'))
+  assert.equal((await active(third)).url, origin + '/archive-1')
+  await third.evaluate(id => window.lexn.command('selectTab', id), thirdTab.id)
+  await app.close()
+  const persisted = new DatabaseSync(join(dir, 'lexn.sqlite'), { readOnly: true })
+  try { assert.equal(persisted.prepare('SELECT COUNT(*) AS count FROM browser_windows WHERE open=1').get().count, 3) }
+  finally { persisted.close() }
+
+  app = await launch()
+  await waitUntil(() => shell().length === 3, 'restart did not reopen all three windows', 25000)
+  const restored = await Promise.all(shell().map(async page => ({ page, state: await getState(page), active: await active(page) })))
+  const restoredSplit = restored.find(item => item.state.split.length === 2)
+  assert.deepEqual(restoredSplit?.state.split, split)
+  assert.ok(restored.some(item => item.state.workspaceId === work && item.active?.id === thirdTab.id))
+  assert.ok(restored.some(item => item.state.workspaceId === personal && item.active?.url === secondTab.url))
+  await restoredSplit.page.locator('.split-pane').nth(1).waitFor()
+})
+
+test('find, zoom, tab sleep, and private windows use isolated browser state', { timeout: 45000 }, async t => {
+  const profile = await mkdtemp(join(tmpdir(), 'drew-performance-'))
+  const server = createServer(serve)
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
+  const origin = 'http://127.0.0.1:' + server.address().port
+  let app
+  t.after(async () => {
+    await app?.close().catch(() => {})
+    server.closeAllConnections()
+    await new Promise(resolve => server.close(resolve))
+    await rm(profile, { recursive: true, force: true })
+  })
+  app = await electron.launch({ args: ['.'], executablePath, env: { ...process.env, LEXN_TEST_PROFILE: profile } })
+  const page = await shellPage(app)
+  await page.evaluate(() => window.lexn.command('finishWelcome'))
+  const openTab = async (page, url) => {
+    await page.evaluate(url => window.lexn.command('newTab', url), url)
+    return waitUntil(async () => {
+      const tab = await active(page)
+      return tab?.url === url && !tab.loading && tab.title.startsWith('LexN Fixture') && tab
+    }, 'test page failed to load')
+  }
+  const one = await openTab(page, origin + '/one')
+  await shortcut(app, 'F', [process.platform === 'darwin' ? 'meta' : 'control'])
+  const field = page.getByRole('textbox', { name: 'Find in page' })
+  await field.fill('Fixture One')
+  await page.locator('.find-bar output').getByText('1 / 1').waitFor()
+  await field.press('Escape')
+  await field.waitFor({ state: 'detached' })
+  await page.evaluate(() => window.lexn.command('pageZoom', 'in'))
+  const view = (url, property) => app.evaluate(({ webContents }, { url, property }) => {
+    const match = webContents.getAllWebContents().find(contents => contents.getURL() === url)
+    return property === 'zoom' ? match?.getZoomLevel() : match?.id
+  }, { url, property })
+  assert.equal(await view(one.url, 'zoom'), 1)
+  const two = await openTab(page, origin + '/two')
+  const firstRenderer = await view(one.url, 'id')
+  assert.ok(firstRenderer)
+  // Playwright disables Chromium renderer backgrounding. Model the native capture flag explicitly.
+  const setCaptureFlag = value => app.evaluate(({ webContents }, { id, value }) => {
+    webContents.fromId(id).isBeingCaptured = () => value
+  }, { id: firstRenderer, value })
+  await setCaptureFlag(true)
+  await assert.rejects(page.evaluate(id => window.lexn.command('sleepTab', id), one.id), /active media or capture/)
+  await setCaptureFlag(false)
+  await page.evaluate(id => window.lexn.command('sleepTab', id), one.id)
+  assert.ok((await getState(page)).tabs.find(tab => tab.id === one.id).sleeping)
+  await waitUntil(async () => !(await view(one.url, 'id')), 'sleeping renderer stayed alive')
+  await page.evaluate(id => window.lexn.command('selectTab', id), one.id)
+  await waitUntil(async () => (await view(one.url, 'id')) && (await view(one.url, 'id')) !== firstRenderer, 'sleeping tab did not wake')
+  await waitUntil(async () => await view(one.url, 'zoom') === 1, 'saved site zoom did not return after waking the tab')
+  assert.ok((await getState(page)).tabs.some(tab => tab.id === two.id))
+  await page.evaluate(() => window.lexn.command('newPrivateWindow'))
+  const privatePage = await waitUntil(() => app.context().pages().find(other => other !== page && other.url() === 'lexn://shell/index.html'), 'private window did not start')
+  const privateState = await getState(privatePage)
+  assert.equal(privateState.privateWindow, true)
+  assert.deepEqual(await privatePage.evaluate(() => window.lexn.history('')), [])
+  const privateUrl = origin + '/private-only'
+  await openTab(privatePage, privateUrl)
+  assert.equal(await app.evaluate(({ webContents }, url) =>
+    webContents.getAllWebContents().find(contents => contents.getURL() === url)?.session.isPersistent(), privateUrl), false)
+  assert.deepEqual(await page.evaluate(() => window.lexn.history('private-only')), [])
+  const db = new DatabaseSync(join(profile, 'lexn.sqlite'), { readOnly: true })
+  try {
+    assert.equal(db.prepare('SELECT COUNT(*) as count FROM browser_windows').get().count, 1)
+    assert.equal(db.prepare('SELECT COUNT(*) as count FROM tabs WHERE url = ?').get(privateUrl).count, 0)
+  } finally { db.close() }
 })
 
 test('Google, web search, and YouTube load in Chromium', { skip: !process.env.LEXN_TEST_PUBLIC_WEB, timeout: 90000 }, async t => {

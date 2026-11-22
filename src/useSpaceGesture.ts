@@ -17,6 +17,7 @@ export function useSpaceGesture(
   const wheelIdle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const pending = useRef<PendingSwipe | null>(null)
   const visible = useRef<SwipePreview | null>(null)
+  const previewFrame = useRef(0)
   const retreatTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   const overSidebar = (target: EventTarget) => Boolean((target as Element).closest?.('.spatial-sidebar'))
   const neighbor = (direction: number) => {
@@ -26,6 +27,7 @@ export function useSpaceGesture(
     return spaces[(index + direction + spaces.length) % spaces.length].id
   }
   const show = (value: SwipePreview | null) => {
+    cancelAnimationFrame(previewFrame.current)
     clearTimeout(retreatTimer.current)
     visible.current = value
     preview(value)
@@ -33,15 +35,16 @@ export function useSpaceGesture(
   const retreat = () => {
     const current = visible.current
     if (pending.current || !current || current.progress === 0) return
-    show({ ...current, progress: 0, settling: false })
+    show({ ...current, progress: 0, settling: true })
     retreatTimer.current = setTimeout(() => show(null), 200)
   }
   const showPreview = (distance: number, threshold: number) => {
     const direction = Math.sign(distance)
     const id = direction && neighbor(direction)
     if (!animate || pending.current) return
-    if (id) show({ id, direction, progress: Math.min(.78, Math.abs(distance) / threshold * .78) })
-    else retreat()
+    if (!id) { retreat(); return }
+    cancelAnimationFrame(previewFrame.current)
+    previewFrame.current = requestAnimationFrame(() => show({ id, direction, progress: Math.min(.78, Math.abs(distance) / threshold * .78) }))
   }
   const cancelSwipe = () => {
     clearTimeout(wheelIdle.current)
@@ -101,7 +104,7 @@ export function useSpaceGesture(
   useEffect(() => {
     void window.lexn.usesNativeSpaceScroll().then(available => { native.current.available = available }).catch(() => {})
     const unsubscribe = window.lexn.onSpaceScroll(event => receive.current(event))
-    return () => { unsubscribe(); clearTimeout(wheelIdle.current); clearTimeout(retreatTimer.current); clearTimeout(pending.current?.timer) }
+    return () => { unsubscribe(); cancelAnimationFrame(previewFrame.current); clearTimeout(wheelIdle.current); clearTimeout(retreatTimer.current); clearTimeout(pending.current?.timer) }
   }, [])
   return {
     cancelSwipe,

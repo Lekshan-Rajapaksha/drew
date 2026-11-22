@@ -49,18 +49,27 @@ function visibleInput(input: HTMLInputElement) {
     input.checkVisibility({ opacityProperty: true, visibilityProperty: true })
 }
 
-function safePassword(input: HTMLInputElement) {
-  if (input.type !== 'password' || input.autocomplete.split(/\s+/).includes('new-password') || !visibleInput(input)) return false
-  const form = input.form
+function safeDestination(form: HTMLFormElement | null, password: boolean) {
   if (!form) return true
-  if (form.method !== 'post') return false
-  if (form.querySelectorAll('input[type=password]').length > 1 && !input.autocomplete.split(/\s+/).includes('current-password')) return false
+  if (password && form.method !== 'post') return false
   try {
     if (new URL(form.getAttribute('action') || location.href, document.baseURI).origin !== location.origin) return false
     return [...form.querySelectorAll('[formaction], [formmethod]')].every(element =>
-      (!element.hasAttribute('formmethod') || element.getAttribute('formmethod')?.toLowerCase() === 'post') &&
+      (!password || !element.hasAttribute('formmethod') || element.getAttribute('formmethod')?.toLowerCase() === 'post') &&
       new URL(element.getAttribute('formaction') || location.href, document.baseURI).origin === location.origin)
   } catch { return false }
+}
+
+function safePassword(input: HTMLInputElement) {
+  const tags = input.autocomplete.split(/\s+/)
+  return input.type === 'password' && !tags.includes('new-password') && visibleInput(input) &&
+    (!(input.form && input.form.querySelectorAll('input[type=password]').length > 1) || tags.includes('current-password')) &&
+    safeDestination(input.form, true)
+}
+
+function safeUsername(input: HTMLInputElement) {
+  return ['text', 'email', 'tel'].includes(input.type) && input.autocomplete.split(/\s+/).includes('username') &&
+    visibleInput(input) && safeDestination(input.form, false)
 }
 
 function loginField() {
@@ -80,31 +89,45 @@ function usernameField(password: HTMLInputElement) {
 }
 
 if (process.isMainFrame) {
-  let prepared: { token: string; url: string; input: HTMLInputElement; time: number } | undefined
+  let edited = false
+  window.addEventListener('input', event => {
+    if (!edited && event.isTrusted) {
+      edited = true
+      ipcRenderer.send('drew:page-edited')
+    }
+  }, { capture: true, passive: true })
+  let prepared: { token: string; url: string; input: HTMLInputElement; time: number; kind: 'username' | 'password' } | undefined
   window.addEventListener('pagehide', () => { prepared = undefined })
   let lastOffer = -Infinity
   window.addEventListener('pointerup', event => {
     if (event.isTrusted && event.button === 0 && event.target instanceof HTMLInputElement && event.target === document.activeElement && !event.target.value &&
-        location.protocol === 'https:' && safePassword(event.target) && performance.now() - lastOffer > 900) {
+        location.protocol === 'https:' && (safePassword(event.target) || safeUsername(event.target)) && performance.now() - lastOffer > 900) {
       lastOffer = performance.now()
       ipcRenderer.send('lexn:offer-login')
     }
   }, { passive: true })
   ipcRenderer.on('lexn:login-prepare', (_event, token: string, origin: string) => {
-    const input = location.protocol === 'https:' && location.origin === origin ? loginField() : undefined
-    prepared = input ? { token, url: location.href, input, time: performance.now() } : undefined
-    ipcRenderer.send('lexn:login-result', 'prepare', token, Boolean(input))
+    prepared = undefined
+    if (location.protocol === 'https:' && location.origin === origin) {
+      const active = document.activeElement
+      const user = active instanceof HTMLInputElement && safeUsername(active) ? active : undefined
+      const pass = loginField()
+      const input = pass ?? user
+      if (input) prepared = { token, url: location.href, input, time: performance.now(), kind: pass ? 'password' : 'username' }
+    }
+    ipcRenderer.send('lexn:login-result', 'prepare', token, prepared?.kind ?? false)
   })
   ipcRenderer.on('lexn:login-apply', (_event, token: string, origin: string, username: string, password: string) => {
     const entry = prepared
     prepared = undefined
     const valid = entry && entry.token === token && entry.url === location.href && location.origin === origin &&
-      performance.now() - entry.time < 30_000 && entry.input.isConnected && safePassword(entry.input)
+      performance.now() - entry.time < 30_000 && entry.input.isConnected &&
+      (entry.kind === 'password' ? Boolean(password) && safePassword(entry.input) : !password && Boolean(username) && safeUsername(entry.input))
     if (valid) {
       const input = entry.input
-      const user = username ? usernameField(input) : undefined
+      const user = entry.kind === 'password' && username ? usernameField(input) : undefined
       const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
-      setValue?.call(input, password)
+      setValue?.call(input, entry.kind === 'password' ? password : username)
       if (user) setValue?.call(user, username)
       for (const field of user ? [user, input] : [input]) {
         field.dispatchEvent(new Event('input', { bubbles: true, composed: true }))

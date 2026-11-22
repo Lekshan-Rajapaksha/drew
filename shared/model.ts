@@ -40,6 +40,9 @@ export interface Settings {
   homeClock: boolean
   homeSuggestions: boolean
   homeDensity: 'relaxed' | 'compact'
+  memorySaver: 'off' | '15' | '30' | '60'
+  linkHosts: string
+  batterySaver: 'off' | 'on' | 'battery'
   motion: 'system' | 'off'
   sidebarDismiss: 'quick' | 'balanced' | 'relaxed'
   notificationPolicy: 'approved' | 'block'
@@ -52,6 +55,7 @@ export const defaultSettings: Settings = {
   background: 'match', accentColor: '', accentEnd: '', colorIntensity: 'balanced', sidebarWidth: '284', downloadPath: '', topToolbar: false, keepSidebarOpen: false, favoriteSize: 'medium', archiveHours: '24', javascript: true,
   homeRecent: true, homeClock: true, homeSuggestions: true,
   sidebarStyle: 'full', topTabs: 'above', topActions: 'full',
+  memorySaver: 'off', batterySaver: 'off', linkHosts: '',
   homeDensity: 'relaxed', motion: 'system', sidebarDismiss: 'balanced', notificationPolicy: 'approved', keyboardShortcuts: '{}',
 }
 export interface Workspace { id: string; name: string; accent: string; activeTab: string | null; profileId: string | null; icon: string }
@@ -61,20 +65,21 @@ export interface SavedTab {
   pinned: 0 | 1; lastUsed: number; groupId: string | null; position: number
 }
 export interface Tab extends SavedTab {
-  audible: boolean; muted: boolean; media: boolean; playing: boolean; loading: boolean; back: boolean; forward: boolean; error: string | null
+  sleeping: boolean; audible: boolean; muted: boolean; media: boolean; playing: boolean; loading: boolean; back: boolean; forward: boolean; error: string | null
 }
 export interface Bookmark { id: string; title: string; url: string; folderId: string | null }
 export interface Folder { id: string; name: string }
 export interface Visit { id: string; url: string; title: string; visitedAt: number; visits?: number }
 export interface Download {
   id: string; name: string; path: string; url: string; received: number; total: number
-  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted'; createdAt: number
+  state: 'progressing' | 'paused' | 'completed' | 'cancelled' | 'interrupted'; createdAt: number
 }
 export type Permission = 'camera' | 'microphone' | 'notifications'
 export interface SitePermission { origin: string; permission: Permission; allow: 0 | 1 }
 export interface SiteCookie { name: string; domain: string; path: string; secure: boolean }
 export interface Favorite { id: string; url: string; title: string; favicon: string | null; icon: string }
 export interface ArchivedTab { id: string; url: string; title: string; archivedAt: number }
+export interface SplitPane { id: string; weight: number }
 export interface ViewRect { x: number; y: number; width: number; height: number }
 export interface PaneRect extends ViewRect { id: string }
 export type BrowserBrand = 'Chrome' | 'Arc' | 'Dia' | 'Ardia' | 'Opera' | 'Opera GX' | 'Edge' | 'Brave' | 'Vivaldi' | 'Chromium'
@@ -91,9 +96,11 @@ export interface BrowserState {
   appVersion: string
   welcomePending: boolean
   windowMaximized: boolean
+  batterySaving: boolean
+  privateWindow: boolean
   passwords: SavedLogin[];
   extensions: ProfileExtension[];
-  favorites: Favorite[]; archived: ArchivedTab[];
+  favorites: Favorite[]; canUndoClear: boolean; split: SplitPane[];
   sidebarPreviews: Record<string, {
     favorites: Favorite[]; size: Settings['favoriteSize']; tabs: Tab[]; groups: TabGroup[]
     settings: Pick<Settings, 'theme' | 'accentColor' | 'accentEnd' | 'topToolbar' | 'keyboardShortcuts'>
@@ -104,8 +111,18 @@ export interface BrowserState {
   settings: Settings; permissions: SitePermission[];
 }
 export interface Commands {
+  sleepTab: [id: string]
+  findPage: [query: string, direction?: 'next' | 'previous']
+  pageZoom: [direction: 'in' | 'out' | 'reset']
+  printPage: []
+  savePagePdf: []
+  moveToWindow: [id: string]
+  siteInfo: []
   newTab: [url?: string]
   newWindow: []
+  newPrivateWindow: []
+  exportWorkspace: []
+  moveToSpace: [tabId: string, space: string]
   home: []
   setGradient: [string, string]
   setNavigationLayout: ['sidebar' | 'compact' | 'top']
@@ -115,6 +132,8 @@ export interface Commands {
   saveLogin: [url: string, username: string, password: string]
   copyLogin: [id: string]
   fillLogin: []
+  checkForUpdates: []
+  defaultBrowser: []
   removeLogin: [id: string]
   loadExtension: []
   removeExtension: [id: string]
@@ -132,6 +151,9 @@ export interface Commands {
   openFavorite: [id: string]
   archiveTabs: []
   restoreArchived: [id: string]
+  restoreArchivedTabs: [ids: string[]]
+  undoClear: []
+  setSplit: [spaceId: string, panes: SplitPane[]]
   removeGroup: [id: string]
   navigate: [id: string, input: string]
   pageAction: [id: string, action: 'back' | 'forward' | 'reload' | 'stop' | 'home']
@@ -144,7 +166,7 @@ export interface Commands {
   addFolder: [name: string]
   deleteFolder: [id: string]
   deleteVisit: [id: string]
-  download: [id: string, action: 'cancel' | 'open' | 'reveal']
+  download: [id: string, action: 'cancel' | 'open' | 'reveal' | 'pause' | 'resume' | 'retry']
   setSetting: [key: keyof Settings, value: string | boolean]
   chooseDownloadPath: []
   clearData: [kind: 'history' | 'cookies' | 'cache' | 'storage']
@@ -154,7 +176,7 @@ export interface Commands {
   finishWelcome: []
   windowAction: [action: 'minimize' | 'toggleMaximize' | 'close']
 }
-export type Shortcut = 'command' | 'split' | 'toolbar' | 'browse' | 'address' | 'sidebar' | 'history' | 'bookmarks' | 'downloads' | 'settings'
+export type Shortcut = 'find' | 'command' | 'split' | 'toolbar' | 'browse' | 'address' | 'sidebar' | 'history' | 'bookmarks' | 'downloads' | 'settings'
 export interface SpaceScroll {
   x: number; dx: number; dy: number; phase: 'begin' | 'change' | 'end' | 'discrete'; momentum: boolean
 }
@@ -163,15 +185,18 @@ export interface Bridge {
   getState(): Promise<BrowserState>
   command<K extends keyof Commands>(name: K, ...args: Commands[K]): Promise<void>
   history(query: string): Promise<Visit[]>
+  archive(query: string, offset: number): Promise<ArchivedTab[]>
   frequent(): Promise<Visit[]>
   cookies(): Promise<SiteCookie[]>
   importSources(): Promise<BrowserImportSource[]>
-  importBrowserData(kind: BrowserImportKind, source?: string): Promise<BrowserImportResult | null>
+  importBrowserData(kind: BrowserImportKind, source?: string, review?: boolean): Promise<BrowserImportResult | null>
   layout(rect: ViewRect | PaneRect[] | null): void
   layoutSidebar(width: number, open: boolean, animate: boolean): void
   onState(listener: (state: BrowserState) => void): () => void
   usesNativeSpaceScroll(): Promise<boolean>
   onSpaceScroll(listener: (scroll: SpaceScroll) => void): () => void
+  onFind(listener: (match: { index: number; total: number }) => void): () => void
+  onTab(listener: (tab: Tab) => void): () => void
   onPointer(listener: (x: number | null) => void): () => void
   onShortcut(listener: (name: Shortcut) => void): () => void
 }

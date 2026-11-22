@@ -3,7 +3,7 @@ import { Fragment } from 'react'
 import { Plus, X } from 'lucide-react'
 import { command } from './state'
 import { Tool } from './ui'
-import type { Tab } from '../shared/model'
+import type { SplitPane, Tab } from '../shared/model'
 
 function PaneAddress({ tab }: { tab: Tab }) {
   const [edit, setEdit] = useState<string | null>(null)
@@ -19,8 +19,11 @@ function PaneAddress({ tab }: { tab: Tab }) {
   </form>
 }
 
-export function SplitView({ panes, remove, add }: { panes: Tab[]; remove: (id: string) => void; add: () => void }) {
-  const [weights, setWeights] = useState<Record<string, number>>({})
+export function SplitView({ panes, layout, resizePanes, remove, add }: {
+  panes: Tab[]; layout: SplitPane[]; resizePanes: (weights: Record<string, number>) => void; remove: (id: string) => void; add: () => void
+}) {
+  const [draft, setWeights] = useState<Record<string, number> | null>(null)
+  const weights = draft ?? Object.fromEntries(layout.map(pane => [pane.id, pane.weight]))
   const fragment: typeof FragmentType = Fragment
   const resize = (event: React.PointerEvent<HTMLButtonElement>, left: Tab, right: Tab) => {
     const handle = event.currentTarget
@@ -32,13 +35,19 @@ export function SplitView({ panes, remove, add }: { panes: Tab[]; remove: (id: s
     const rightWeight = weights[right.id] ?? 1
     const totalWeight = leftWeight + rightWeight
     handle.setPointerCapture(event.pointerId)
+    let resized: Record<string, number> | null = null
     const move = (pointer: PointerEvent) => {
       const next = Math.max(80, Math.min(lhs + rhs - 80, lhs + pointer.clientX - start))
       const units = next / (lhs + rhs) * totalWeight
-      setWeights(previous => ({ ...previous, [left.id]: units, [right.id]: totalWeight - units }))
+      resized = { ...weights, [left.id]: units, [right.id]: totalWeight - units }
+      setWeights(resized)
     }
     handle.addEventListener('pointermove', move)
-    handle.addEventListener('lostpointercapture', () => handle.removeEventListener('pointermove', move), { once: true })
+    handle.addEventListener('lostpointercapture', () => {
+      handle.removeEventListener('pointermove', move)
+      if (resized) resizePanes(resized)
+      setWeights(null)
+    }, { once: true })
   }
   return <div className="split-view">
     {panes.map((tab, index) => {

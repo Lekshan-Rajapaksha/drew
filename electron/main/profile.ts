@@ -1,15 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, statSync } from 'node:fs'
 import { basename, extname, join } from 'node:path'
-import { app, dialog, Notification, session, shell, type BrowserWindow, type DownloadItem, type Session } from 'electron'
+import { app, BrowserWindow, dialog, Notification, session, shell, type View, type DownloadItem, type Session } from 'electron'
 import type { Download, Permission } from '../../shared/model.js'
-import { originOf } from '../../shared/navigation.js'
+import { originOf, webUrl } from '../../shared/navigation.js'
 import { extensionPopup } from './extensions.js'
 import type { Database } from './database.js'
 
 const documentTypes = new Set(['.txt', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp3', '.mp4', '.wav'])
 
-function configurePermissions(session: Session, db: Database, profile: string) {
+function configurePermissions(session: Session, db: Database, profile: string, changed: () => void) {
   const permits = (origin: string, permission: Permission) => origin.startsWith('https://') &&
     (permission !== 'notifications' || db.settings(profile).notificationPolicy !== 'block') &&
     db.one<{ allow: number }>('SELECT allow FROM profile_permissions WHERE workspaceId = ? AND origin = ? AND permission = ?', profile, origin, permission)?.allow === 1
@@ -23,14 +23,45 @@ function configurePermissions(session: Session, db: Database, profile: string) {
       : details.mediaType === 'audio' ? permits(origin, 'microphone')
         : permits(origin, 'camera') && permits(origin, 'microphone')
   })
-  session.setPermissionRequestHandler((_contents, permission, callback, details) => {
+  const prompts = new Set<number>()
+  session.setPermissionRequestHandler((contents, permission, callback, details) => {
     const origin = originOf(details.requestingUrl)
-    if (!details.isMainFrame || !origin) return callback(false)
-    if (permission === 'notifications') return callback(permits(origin, 'notifications'))
-    if (permission === 'media' && 'mediaTypes' in details && details.mediaTypes?.length) {
-      return callback(details.mediaTypes.every(type => permits(origin, type === 'video' ? 'camera' : 'microphone')))
+    if (!details.isMainFrame || !origin?.startsWith('https:')) return callback(false)
+    if (permission === 'notifications' && db.settings(profile).notificationPolicy === 'block') return callback(false)
+    const requested: Permission[] = permission === 'notifications' ? ['notifications']
+      : permission === 'media' && 'mediaTypes' in details && details.mediaTypes?.length
+        ? [...new Set(details.mediaTypes.map(type => type === 'video' ? 'camera' as const : 'microphone' as const))] : []
+    if (!requested.length) return callback(false)
+    const rule = (key: Permission) => db.one<{ allow: number }>(
+      'SELECT allow FROM profile_permissions WHERE workspaceId = ? AND origin = ? AND permission = ?', profile, origin, key)?.allow
+    const rules = requested.map(rule)
+    if (rules.includes(0)) return callback(false)
+    if (rules.every(value => value === 1)) return callback(true)
+    const containsPage = (view: View): boolean =>
+      ('webContents' in view && view.webContents === contents) || view.children.some(containsPage)
+    const owner = BrowserWindow.getFocusedWindow()
+    if (!owner || owner.isModal() || !containsPage(owner.contentView)) return callback(false)
+    if (!contents.isFocused() || originOf(contents.getURL()) !== origin || prompts.has(contents.id)) {
+      return callback(false)
     }
-    callback(false)
+    const id = contents.id
+    const target = contents.getURL()
+    prompts.add(id)
+    void dialog.showMessageBox(owner, {
+      type: 'question', title: 'Drew site permission', message: origin,
+      detail: 'This site requests access to ' + requested.join(' and ') + '.',
+      buttons: ['Allow for this Profile', 'Block for this Profile', 'Dismiss'],
+      defaultId: 2, cancelId: 2, noLink: true,
+    }).then(({ response }) => {
+      if (response === 2 || contents.isDestroyed() || owner.isDestroyed() || contents.getURL() !== target) return callback(false)
+      if (permission === 'notifications' && db.settings(profile).notificationPolicy === 'block') return callback(false)
+      db.transaction(() => {
+        for (const key of requested) db.run('INSERT INTO profile_permissions VALUES (?, ?, ?, ?) ON CONFLICT(workspaceId, origin, permission) DO UPDATE SET allow=excluded.allow',
+          profile, origin, key, Number(response === 0))
+      })
+      changed()
+      callback(response === 0)
+    }).catch(() => callback(false)).finally(() => prompts.delete(id))
   })
 }
 
@@ -40,14 +71,14 @@ export class Downloads {
   private paths = new Set<string>()
   private stopped = false
 
-  constructor(private db: Database, private changed: () => void) {}
+  constructor(private db: Database, private changed: () => void, readonly privateWindow = false) {}
 
   sessionFor(profile: string) {
     const existing = this.sessions.get(profile)
     if (existing) return existing
-    const browserSession = session.fromPartition(profile === this.db.primaryProfile() ? 'persist:lexn-web' : 'persist:lexn-profile-' + profile)
+    const browserSession = session.fromPartition(this.privateWindow ? 'drew-private-' + profile : profile === this.db.primaryProfile() ? 'persist:lexn-web' : 'persist:lexn-profile-' + profile)
     this.sessions.set(profile, browserSession)
-    configurePermissions(browserSession, this.db, profile)
+    configurePermissions(browserSession, this.db, profile, this.changed)
     this.observe(browserSession, profile)
     browserSession.extensions.on('extension-loaded', () => { if (!this.stopped) this.changed() })
     browserSession.extensions.on('extension-unloaded', () => { if (!this.stopped) this.changed() })
@@ -128,10 +159,24 @@ export class Downloads {
 
   list(profile: string) { return this.db.all<Download>('SELECT * FROM downloads WHERE workspaceId = ? ORDER BY createdAt DESC LIMIT 200', profile) }
 
-  async action(profile: string, id: string, action: 'cancel' | 'open' | 'reveal', window: BrowserWindow) {
+  async action(profile: string, id: string, action: 'cancel' | 'open' | 'reveal' | 'pause' | 'resume' | 'retry', window: BrowserWindow) {
     const item = this.db.one<Download>('SELECT * FROM downloads WHERE workspaceId = ? AND id = ?', profile, id)
     if (!item) return
-    if (action === 'cancel') return this.items.get(id)?.cancel()
+    const live = this.items.get(id)
+    if (action === 'cancel') return live?.cancel()
+    if (action === 'pause' || action === 'resume') {
+      if (!live || (action === 'resume' && !live.canResume())) throw new Error('This download cannot ' + action + '.')
+      if (action === 'pause') live.pause()
+      else live.resume()
+      this.db.run('UPDATE downloads SET state = ? WHERE id = ?', action === 'pause' ? 'paused' : 'progressing', id)
+      return
+    }
+    if (action === 'retry') {
+      const url = webUrl(item.url)
+      if (!url || !['cancelled', 'interrupted'].includes(item.state) || live) throw new Error('This download cannot be retried.')
+      this.sessionFor(profile).downloadURL(url)
+      return
+    }
     const available = () => lstatSync(item.path, { throwIfNoEntry: false })?.isFile()
     if (item.state !== 'completed' || !available()) throw new Error('The downloaded file is unavailable.')
     if (action === 'reveal') shell.showItemInFolder(item.path)
@@ -150,9 +195,10 @@ export class Downloads {
 
   dispose() {
     this.stopped = true
-    this.db.run("UPDATE downloads SET state = 'interrupted' WHERE state = 'progressing'")
+    this.db.run("UPDATE downloads SET state = 'interrupted' WHERE state IN ('progressing', 'paused')")
     for (const item of this.items.values()) item.cancel()
     this.items.clear()
     this.paths.clear()
+    if (this.privateWindow) for (const partition of this.sessions.values()) void partition.clearData().catch(() => {})
   }
 }

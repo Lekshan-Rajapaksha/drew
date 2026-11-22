@@ -721,9 +721,9 @@ button.record-link:hover strong { text-decoration: underline; }
 .sidebar-carousel { flex: 1; position: relative; min-height: 0; overflow: clip; }
 .sidebar-slide {
   display: flex; flex-direction: column; height: 100%; min-height: 0;
-  transition: transform .19s cubic-bezier(.18,.74,.24,1);
+
 }
-.sidebar-carousel.swipe-settling .sidebar-slide { transition-duration: .25s; }
+.sidebar-carousel.swipe-settling .sidebar-slide { transition: transform .25s cubic-bezier(.18,.74,.24,1); }
 .sidebar-swipe-next {
   position: absolute; inset: 0; pointer-events: none; background: var(--chrome);
   color: var(--text);
@@ -835,3 +835,13 @@ button.record-link:hover strong { text-decoration: underline; }
 .import-file-actions { display: flex; flex-wrap: wrap; gap: 7px; }
 .import-browser .import-file-note { margin: 7px 0; }
 .import-status { padding: 9px 11px; border-radius: 8px; background: var(--selected); }
+
+.content-layout { position: relative; }
+.find-bar {
+  position: absolute; z-index: 4; top: 5px; right: 14px; max-width: calc(100% - 28px);
+  display: flex; align-items: center; gap: 8px; padding: 6px;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+}
+.find-bar input { min-width: 0; width: 180px; }
+.find-bar output { white-space: nowrap; min-width: 4ch; }
+.address-site-icon { background: transparent; border: 0; padding: 3px; border-radius: 6px; }

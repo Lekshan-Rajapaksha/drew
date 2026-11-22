@@ -1,5 +1,5 @@
-import { useState, type CSSProperties, type ReactNode } from 'react'
-import { ArrowLeft, ArrowRight, ChevronDown, Ellipsis, ExternalLink, Folder, House, Pause, Pin, Play, Plus, RotateCw, Search, Volume2, VolumeX, X } from 'lucide-react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { Moon, ArrowLeft, ArrowRight, ChevronDown, Ellipsis, ExternalLink, Folder, House, Pause, Pin, Play, Plus, RotateCw, Search, Volume2, VolumeX, X } from 'lucide-react'
 import { HOME, themeAccents, type BrowserState, type Favorite, type Tab, type TabGroup, type Workspace } from '../shared/model'
 import { effectiveShortcuts, shortcutLabel } from '../shared/shortcuts'
 import { command, type Page } from './state'
@@ -7,6 +7,8 @@ import { Favorites } from './Favorites'
 import { ServiceRail } from './ServiceRail'
 import { Favicon, Tool } from './ui'
 import type { SwipePreview } from './useSpaceGesture'
+
+type ScrollPositions = Map<string, number>
 
 type SidebarProps = {
   browser: BrowserState; space: Workspace; active?: Tab; page: Page | null; collapsed: boolean; locked: boolean
@@ -20,6 +22,7 @@ type SidebarProps = {
 }
 
 export function Sidebar(props: SidebarProps) {
+  const scrollPositions = useRef<ScrollPositions>(new Map())
   const { browser, preview, collapsed, compact, systemDark, resize } = props
   const neighbor = preview && browser.workspaces.find(space => space.id === preview.id)
   const next = neighbor && browser.sidebarPreviews[neighbor.id]
@@ -29,13 +32,13 @@ export function Sidebar(props: SidebarProps) {
   return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '') + (compact ? ' compact-sidebar' : '')} inert={collapsed}>
     <div className={'sidebar-carousel' + (preview?.settling ? ' swipe-settling' : '')}>
       <div key={props.space.id} className="sidebar-slide sidebar-swipe-current" style={{ transform: `translateX(${-shift}%)` }}>
-        <SidebarPage {...props} />
+        <SidebarPage {...props} positions={scrollPositions.current} />
       </div>
       {neighbor && next && preview && <div key={neighbor.id + '-preview-' + preview.direction} className={`sidebar-slide sidebar-swipe-next ${nextTheme ?? ''}`} inert aria-hidden="true"
         style={{ '--ambient': accent, '--accent': accent, '--ambient-end': next.settings.accentEnd || accent,
           '--swipe-edge': preview.direction * 100 + '%',
           transform: `translateX(${preview.direction * 100 - shift}%)` } as CSSProperties}>
-        <SidebarPage {...props} space={neighbor} page={null}
+        <SidebarPage {...props} space={neighbor} page={null} positions={scrollPositions.current} previewOnly
           active={next.tabs.find(tab => tab.id === neighbor.activeTab)}
           browser={{ ...browser, settings: { ...browser.settings, ...next.settings, favoriteSize: next.size },
             favorites: next.favorites, tabs: next.tabs, groups: next.groups,
@@ -56,7 +59,10 @@ function PreviewToolbar({ url }: { url?: string }) {
   </div>
 }
 
-function SidebarPage({ browser, space, active, page, locked, pinPending, pinSidebar, openActions, select, newTab, groupEditor, context, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, compact, address, goHome }: SidebarProps) {
+function SidebarPage({ browser, space, active, page, locked, pinPending, pinSidebar, openActions, select, newTab, groupEditor, context, chrome, dragTab, openFavorite, favoriteMenu, editFavorite, compact, address, goHome, positions, previewOnly }: SidebarProps & { positions: ScrollPositions; previewOnly?: boolean }) {
+  const scroll = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => { if (scroll.current) scroll.current.scrollTop = positions.get(space.id) ?? 0 }, [positions, space.id])
+
   const [closedGroups, setClosedGroups] = useState<string[]>([])
   const [dragging, setDragging] = useState('')
   const platform = window.lexn.platform
@@ -76,6 +82,7 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
       aria-current={tab.id === active?.id && !page ? 'page' : undefined}>
       {tab.loading ? <span className="spinner small" /> : <Favicon tab={tab} />}
       <span>{tab.title}</span>
+      {tab.sleeping && <Moon size={13} role="img" aria-label="Sleeping tab" />}
     </button>
     {tab.media && <Tool label={tab.playing ? 'Pause playback' : 'Resume playback'} onClick={() => { void command('mediaTab', tab.id) }}>
       {tab.playing ? <Pause size={14} /> : <Play size={14} />}
@@ -115,7 +122,9 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
         <Tool label="Browser menu" onClick={openActions}><Ellipsis size={18} /></Tool>
       </> : chrome}
     </header>
-    <div className="tabs-scroll spatial-scroll" key={space.id}>
+    <div className="tabs-scroll spatial-scroll" ref={scroll} onScroll={event => {
+      if (!previewOnly) positions.set(space.id, event.currentTarget.scrollTop)
+    }}>
       <Favorites items={browser.favorites} size={browser.settings.favoriteSize} activeUrl={active?.url}
         open={openFavorite} edit={editFavorite} menu={favoriteMenu} />
       <section className="tab-tier" aria-label="Pinned tabs">
@@ -133,7 +142,7 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
         </div>)}
       </section>}
       <section className="tab-tier today-tier" aria-label="Today">
-        <div className="side-label">Today<button type="button" className="clear-tabs" onClick={() => { void command('archiveTabs') }}
+        <div className="side-label">Today{browser.canUndoClear && <button type="button" className="clear-tabs" onClick={() => { void command('undoClear') }}>Undo Clear</button>}<button type="button" className="clear-tabs" onClick={() => { void command('archiveTabs') }}
           disabled={!tabs.some(tab => !tab.pinned && tab.url !== 'about:blank')}>Clear</button></div>
         <button type="button" className="new-tab" onClick={newTab} title="New tab"><Plus size={17} /><span>New Tab</span><kbd>{newTabShortcut}</kbd></button>
         {tabs.filter(tab => !tab.pinned).map(renderTab)}

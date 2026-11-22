@@ -28,7 +28,7 @@ Rebuild after editing. Dev and packaged launches both load the same compiled, lo
 - **Cmd/Ctrl+T** opens the Command Bar to navigate in a new tab, switch to open tabs, or run browser actions such as Clear Cache and Split View. **Cmd/Ctrl+L** opens the same bar for the current address. Use the arrows and Enter to choose a result.
 - **Settings → New Tab** controls the background, layout spacing, recent activity, clock, and suggestions from your local history. **Settings → Appearance** offers gradient presets and custom accent colors for each Profile. **Settings → General** sets the URL opened by the Home button.
 - **Settings → Appearance → Navigation layout** previews the floating sidebar, top toolbar, and compact rail. With the top toolbar enabled, put the tab strip above or below the address bar, hide it, or use fewer toolbar buttons.
-- **Cmd/Ctrl+N** or **Browser menu → New Window** opens an independent tab set in the current Profile. Additional windows share that Profile’s site storage and preferences. The sidebar lists same-Profile tabs under **Other windows**. Selecting one raises its window. Tabs in additional windows last for the life of the window.
+- **Cmd/Ctrl+N** or **Browser menu → New Window** opens an independent tab set in the current Profile. Additional windows share that Profile’s site storage and preferences. The sidebar lists same-Profile tabs under **Other windows**. Selecting one raises its window. Quitting Drew saves open windows, including their current Space, tabs, and split layout.
 - **Settings → Import** or **Import browser data** on the welcome screen opens a browser picker with per-browser export guidance. Drew can transfer bookmarks and recent history from detected Chromium Profiles, including Opera and Opera GX. You can also select a Chromium Profile folder, bookmarks HTML file, Arc or Dia Markdown export, or password CSV. Passwords are encrypted through system storage. The import includes bookmarks, history, and passwords, depending on the source you select.
 - Move the pointer to the left edge to reveal the sidebar. The full-height rounded sidebar has a small vertical inset. It floats over the live webpage and slides away when the pointer leaves. Pinning it reserves space and resizes the page. **Cmd/Ctrl+S** holds the sidebar open or returns it to auto-hide. The pin and sidebar width apply to every Profile and persist across launches. Bookmarks, History, Downloads, Archived tabs, and Settings are in the fixed sidebar footer and the browser menu. Mac traffic lights sit in the top-left corner. On Windows, minimize, maximize, and close stay above the page in the top-right corner. With the optional toolbar hidden, web content reaches the top edge. The optional navigation toolbar stays hidden by default and can be toggled in Appearance or with **Cmd/Ctrl+Shift+Y**.
 - Use a horizontal two-finger swipe over a webpage to go back or forward in its history. Horizontal scrolling areas on websites keep their scroll behavior.
@@ -49,13 +49,29 @@ In **Settings → Import**, select a detected browser and choose **Import all Pr
 
 Select **Include password CSVs** during migration. Drew asks for each source Profile’s password export and encrypts the accounts in its matching Drew Profile. You can also choose a **Password destination Profile** to import a single CSV later. Drew saves one entry per destination Profile, website origin, and exact username. Multiple accounts for a site remain separate, and imports retain existing passwords for matching accounts. Browser password exports are plaintext files and remain in the location you chose until you delete them. Passkeys, session tokens, payment data, and the source browser's private vault are outside the password CSV format Drew imports.
 
-Click the password field on a matching HTTPS sign-in page and choose a saved account. You can also use **Cmd/Ctrl+Shift+L** or **Browser menu → Fill saved login**. Autofill checks the current Profile, page and sign-in form, including its submit destination.
+Click a password field or a username field marked for autofill on a matching HTTPS sign-in page, then choose a saved account. You can also use **Cmd/Ctrl+Shift+L** or **Browser menu → Fill saved login**. Autofill checks the current Profile, page and sign-in form, including its submit destination. On a username-only step, Drew fills the username and waits for the password step.
 
 Drew encrypts passwords with Electron's OS-backed storage. The encrypted record binds the password to its Profile and account. macOS uses Keychain and Windows uses DPAPI. Windows DPAPI protects against other OS users. Software already running as the same Windows user can have access to that user's DPAPI material. Drew never stores the selected export or sends imported password values to the interface. Copies go to the system clipboard in the focused Profile window and are cleared after 30 seconds if still present while Drew is running. OS clipboard history and other clipboard readers have their own retention.
 
 Packaged builds require the integrity-checked app archive, disable Node configuration and inspector flags, and encrypt Chromium cookies on write. Browsing history, URLs, bookmarks, download paths, and password account labels are separate local metadata. The password vault does not provide full disk encryption. Keep previous-version installers separate from the upgraded Profile because previous versions may be unable to read newly encrypted cookies.
 
-Run `npm run release:signed` from the target OS with production signing configured. This runs the dependency audit and tests, requires a successful signature, and verifies Developer ID and notarization on macOS or timestamped Authenticode on Windows. The verification output is under `release/<version>/distribution`. Local builds can be used for testing. They require release signing, native installer testing, and release-channel review before external distribution.
+Run `npm run release:signed` from the target OS with production signing configured. Set `DREW_UPDATE_URL` to the HTTPS directory for the stable release channel on that platform. On Windows, set `DREW_WINDOWS_PUBLISHER` to the signing certificate’s publisher name. The release script runs the dependency audit and tests, then verifies Developer ID and notarization on macOS or timestamped Authenticode on Windows. See the verification output under `release/<version>/distribution`. Local builds omit the update channel.
+
+Publish the signed installer or ZIP and generated blockmaps before publishing the matching update manifest. Verify the installed previous release can download and install the update, retain its Profiles and windows, and reopen successfully. Test a broken download and the operating system’s default-browser registration on both platforms. If an update needs to be rolled back, issue a corrected build with a higher version and document any data compatibility requirements. Drew checks periodically and in **Settings → About**. Download and restart require user action. Target publication within 48 hours of an upstream fix for a critical or actively exploited Chromium issue, and track that deadline from the first available patched Electron release. [Electron update guidance](https://www.electronjs.org/docs/latest/tutorial/updates)
+
+## Browser controls and performance
+
+- **Cmd/Ctrl+F** finds text on the active webpage. Enter and Shift+Enter move between matches. **Cmd/Ctrl+Plus**, **Minus**, and **0** change or reset zoom for the current site and Profile. **Cmd/Ctrl+P** prints. The Command Bar also offers **Save Page as PDF**.
+- **Settings → General** includes opt-in Memory Saver and Battery Saver. Background tabs can also be put to sleep from their context menu. Selecting a sleeping tab restores its navigation history when available and reloads the page. Drew protects visible panes, tabs with detected edits, media or capture, sign-in popups, and Profiles with an active download.
+- **Cmd/Ctrl+Shift+N** opens a Private window with an in-memory history database and Chromium session. Each Private window starts fresh. Downloaded and explicitly saved files remain on disk.
+- The tab context menu can move tabs between Spaces in the same Profile or move a tab to a new window. A move to a new window reloads the page. **Settings → General** can route externally opened links from exact hostnames to a selected Profile.
+- **Settings → Import** previews discovered item counts before importing. **Export Workspace** saves the current Space’s links and Profile bookmarks and Favorites as bookmarks HTML. Downloads supports pausing, resuming eligible active downloads, and retrying eligible interrupted or cancelled HTTP(S) downloads.
+
+### Performance and compatibility checks
+
+Use a clean test Profile and sample 1, 12, and 50 tabs on the same Mac and Windows laptops before and after a change. Compare foreground and minimized idle CPU wakeups, memory after sleeping eligible tabs, browser-state message counts, swipe and resize frame times, and unplugged power use with brightness and workload held constant. Run calls, edited forms, video, sign-in popups, and live downloads while testing sleep eligibility.
+
+Release validation still requires an installed signed upgrade and recovery drill, default-browser handoff, real Google and Microsoft accounts, passkeys and MFA, compatible password managers, screen sharing and DRM, and native Windows trackpad and assistive-technology checks.
 
 ## Architecture
 
@@ -70,7 +86,7 @@ Run `npm run release:signed` from the target OS with production signing configur
 | `shared/` | Shared browser types, constants, and address parsing |
 | `src/` | React UI, Zustand state, Vite build, Tailwind/CSS design system, and deferred assistant surface |
 
-The main process hosts both the shell and the website views. The active website or up to four split panes are attached to the native window. Link previews run in a separate sandboxed child window. Restored tabs instantiate their Chromium view when first selected, and loaded background views retain their state until closed or the window shuts down. The React shell owns the toolbar, sidebar, internal pages, and overlays. Main-process state drives tab selection, load state, history buttons, titles, and favicons.
+The main process hosts both the shell and the website views. The active website or up to four split panes are attached to the native window. Link previews run in a separate sandboxed child window with a browser-controlled destination strip and an **Open in tab** action. Restored tabs instantiate their Chromium view when first selected, and loaded background views retain their state until closed or the window shuts down. The React shell owns the toolbar, sidebar, internal pages, and overlays. Main-process state drives tab selection, load state, history buttons, titles, and favicons.
 
 ### SQLite and profile data
 
@@ -79,6 +95,7 @@ The database lives at `lexn.sqlite` under Electron’s `app.getPath('userData')`
 | Tables | Stored data |
 | --- | --- |
 | `workspaces`, `tab_groups`, `tabs` | Profile names, accents, selection, group membership, pinned state, tab positions and current URLs |
+| `browser_windows`, `archived_tabs` | Restorable windows, split layouts and archived tab history |
 | `bookmarks`, `bookmark_folders` | Saved title, URL, and optional folder |
 | `history` | Committed URLs, titles and visit timestamps |
 | `downloads` | Destination, progress, timestamps and transfer state from Chromium |
@@ -113,7 +130,7 @@ npm ci
 npm run dist:win
 ```
 
-This targets Windows x64 and produces an NSIS installer and a portable executable. For external distribution, configure Authenticode signing through the build environment. Test installation, launching, generated shortcuts, downloading, and uninstall on both Windows 10 and Windows 11. See the [Electron Builder NSIS documentation](https://www.electron.build/v26/docs/nsis/).
+This targets Windows x64 and produces an NSIS installer and a portable executable. The installed build registers for HTTP and HTTPS in Windows Default Apps. Users choose Drew in system settings. For external distribution, configure Authenticode signing through the build environment. Test installation, launching, generated shortcuts, downloading, and uninstall on both Windows 10 and Windows 11. See the [Electron Builder NSIS documentation](https://www.electron.build/v26/docs/nsis/).
 
 ## Testing
 
@@ -154,8 +171,8 @@ On Apple Silicon, the source build, static checks, unit tests, and Playwright de
 ## Known limitations
 
 - Windows and Intel macOS require native installer and runtime validation. Distribution signing and notarization require release credentials.
-- Sessions restore current tab URLs, workspace selections, tabs, pins and groups. Chromium back/forward history and closed-tab undo are confined to the running session.
-- Profiles have local data only. Password saving is manual and browser autofill remains out of scope. Chrome Web Store installation, automatic PiP on tab switch, sync, incognito, AI actions, and automatic updates remain out of scope. Windows default-browser registration still needs platform work.
-- A new-window request opens a normal tab or a pinned-link preview with no opener relationship. Some popup-based sign-in flows may require another sign-in method.
+- Sessions restore current tab URLs, workspace selections, tabs, pins, groups and split layouts. Chromium back/forward history and closed-tab undo are confined to the running session. Archived tabs can be searched and restored in batches. **Undo Clear** restores the most recent Clear from its originating window and Space.
+- Profiles keep their data locally. Password saving is manual. Chrome Web Store installation, automatic PiP on tab switch, sync and AI actions remain out of scope.
+- Eligible HTTPS popups can retain their opener for sign-in. Google and Microsoft accounts, passkeys, MFA, password changes, and password-manager extensions need provider-specific compatibility testing.
 - Search suggestions are local. The new-tab background offers three palettes, and the light theme applies to the browser chrome and management pages.
 # drew

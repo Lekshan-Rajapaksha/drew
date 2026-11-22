@@ -5,6 +5,8 @@ export const shortcutDefinitions = {
   fillLogin: { label: 'Fill saved login', binding: 'Shift+L' },
   closeTab: { label: 'Close current tab', binding: 'W' },
   reopenTab: { label: 'Reopen closed tab', binding: 'Shift+T' },
+  find: { label: 'Find in page', binding: 'F' },
+  print: { label: 'Print page', binding: 'P' },
   reload: { label: 'Reload page', binding: 'R' },
   sidebar: { label: 'Toggle sidebar', binding: 'S' },
   toolbar: { label: 'Toggle top toolbar', binding: 'Shift+Y' },
@@ -25,7 +27,7 @@ export function defaultShortcut(action: ShortcutAction, platform: string): strin
 
 export function allowedShortcut(binding: string, platform: string) {
   if (!/^(Shift\+)?[A-Z0-9,]$/.test(binding)) return false
-  const reserved = ['A', 'C', 'V', 'X', 'Y', 'Z', 'Shift+Z']
+  const reserved = ['A', 'C', 'V', 'X', 'Y', 'Z', 'Shift+Z', 'Shift+N']
   if (platform === 'darwin') reserved.push('H', 'M', 'Q', 'Shift+Q', 'Shift+W')
   return !reserved.includes(binding)
 }

@@ -156,8 +156,8 @@ test('v1 shared data migrates to the first profile without changing the active p
     INSERT INTO settings VALUES ('workspaceId', '"work"'), ('theme', '"light"');
     CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT, accent TEXT, activeTab TEXT);
     INSERT INTO workspaces VALUES ('personal', 'Home', '#b5a2ff', NULL), ('work', 'Work', '#72e3ba', NULL);
-    CREATE TABLE tabs (id TEXT PRIMARY KEY);
-    INSERT INTO tabs VALUES ('previous-tab');
+    CREATE TABLE tabs (id TEXT PRIMARY KEY, workspaceId TEXT, position INTEGER);
+    INSERT INTO tabs VALUES ('previous-tab', 'work', 0);
     CREATE TABLE tab_groups (id TEXT PRIMARY KEY);
     CREATE TABLE bookmark_folders (id TEXT PRIMARY KEY, name TEXT);
     INSERT INTO bookmark_folders VALUES ('folder', 'Reading');
@@ -177,6 +177,7 @@ test('v1 shared data migrates to the first profile without changing the active p
     assert.equal(db.get('workspaceId', ''), 'work')
     assert.equal(db.primaryProfile(), 'personal')
     assert.ok(db.one('SELECT lastUsed FROM tabs').lastUsed > 0)
+    assert.equal(db.one('SELECT windowId FROM tabs').windowId, 'main')
     assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites WHERE profileId = ?', 'personal').count, 8)
     assert.equal(db.one('SELECT COUNT(*) AS count FROM favorites WHERE profileId = ?', 'work').count, 8)
     assert.equal(db.settings('personal').theme, 'light')
@@ -208,6 +209,12 @@ test('the active Space’s Profile supplies a shared sidebar pin and width on up
   legacy.setProfileSetting(work, 'theme', 'slate')
   legacy.addWorkspace('work-space', 'Project', '#abc123', work, '')
   legacy.set('workspaceId', 'work-space')
+  legacy.run('DROP INDEX tabs_window')
+  legacy.run('DROP INDEX archived_space_time')
+  legacy.run('ALTER TABLE tabs DROP COLUMN windowId')
+  legacy.run('ALTER TABLE archived_tabs DROP COLUMN batch')
+  legacy.run('ALTER TABLE archived_tabs DROP COLUMN windowId')
+  legacy.run('DROP TABLE browser_windows')
   legacy.run('PRAGMA user_version = 5')
   legacy.close()
 

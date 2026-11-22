@@ -52,6 +52,7 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
   const profile = browser.workspaces.find(item => item.id === browser.profileId)
   const resolvedAccent = settings.accentColor || themeAccents[settings.theme] || space?.accent || '#b5a2ff'
   const [homepage, setHomepage] = useState(settings.homepage === HOME ? '' : settings.homepage)
+  const [linkHosts, setLinkHosts] = useState(settings.linkHosts)
   const [homeSaved, setHomeSaved] = useState(false)
   const [origin, setOrigin] = useState('')
   const [permission, setPermission] = useState<Exclude<Permission, 'notifications'>>('camera')
@@ -107,6 +108,18 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
       </Setting>
       <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
         {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
+      </Setting>
+      {!browser.privateWindow && <Setting label="Open external links in this Profile" detail="Enter exact hostnames, separated by commas.">
+        <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', 'linkHosts', linkHosts) }}>
+          <input aria-label="Website hostnames" value={linkHosts} placeholder="mail.example.com" maxLength={1024} onChange={event => setLinkHosts(event.target.value)} />
+          <button className="secondary" type="submit">Save</button>
+        </form>
+      </Setting>}
+      <Setting label="Memory Saver" detail="Sleep eligible background tabs and reload them when selected.">
+        {select('memorySaver', 'Memory Saver', { off: 'Off', '15': 'After 15 minutes', '30': 'After 30 minutes', '60': 'After 60 minutes' })}
+      </Setting>
+      <Setting label="Battery Saver" detail="Simplifies motion and sleeps eligible tabs sooner.">
+        {select('batterySaver', 'Battery Saver', { off: 'Off', battery: 'On battery', on: 'Always on' })}
       </Setting>
       <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
       <Setting label="Download location" detail={settings.downloadPath || 'System Downloads folder'}>
@@ -168,7 +181,10 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
       <Setting label="Color intensity">{select('colorIntensity', 'Color intensity', { subtle: 'Subtle', balanced: 'Balanced', vivid: 'Vivid' })}</Setting>
       <Setting label="Favorite icon size">{select('favoriteSize', 'Favorite icon size', { small: 'Small', medium: 'Medium', large: 'Large' })}</Setting>
     </div>}
-    {section === 'Import' && <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />}
+    {section === 'Import' && (browser.privateWindow ? <p>Import is unavailable in private windows.</p> : <>
+      <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />
+      <button type="button" className="secondary" onClick={() => { void command('exportWorkspace') }}>Export workspace as bookmarks HTML</button>
+    </>)}
     {section === 'New Tab' && <div className="setting-list">
       <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
         {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}
@@ -253,6 +269,8 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
     </>}
     {section === 'About' && <div className="setting-list">
       <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {browser.appVersion}</span></Setting>
+      <Setting label="Software updates"><button type="button" className="secondary" onClick={() => { void command('checkForUpdates') }}>Check for updates</button></Setting>
+      <Setting label="Default browser"><button type="button" className="secondary" onClick={() => { void command('defaultBrowser') }}>Set up default browser</button></Setting>
       <Setting label="Default browser" detail="Use your operating system’s default apps settings to choose its web browser. OS registration varies by installer." />
       <Setting label="Local profile" detail="Browsing data is stored on this device. Each browser profile keeps separate logins, history, bookmarks, downloads and permissions." />
     </div>}

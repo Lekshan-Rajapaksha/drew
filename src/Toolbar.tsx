@@ -33,9 +33,9 @@ export function Toolbar({ variant, toggleToolbar, active, input, setInput, field
     <div className="address-wrap">
       <form className="address" onSubmit={event => { event.preventDefault(); submit(suggestions[suggestionIndex]?.url ?? input) }}>
         {active?.loading ? <span className="spinner small" /> : atHome ? <Search size={16} />
-          : active && <span className="address-site-icon" title={active.url.startsWith('https://') && !active.error ? 'HTTPS connection' : 'Connection status'}>
+          : active && <button type="button" className="address-site-icon" aria-label="Site information" title="Site information" onClick={() => { void command('siteInfo') }}>
             <Favicon tab={active} />
-          </span>}
+          </button>}
         <input ref={field} spellCheck={false} autoCapitalize="off" autoComplete="off" aria-label="Address and search"
           role="combobox" aria-expanded={suggestions.length > 0} aria-autocomplete="list" aria-controls={suggestions.length ? 'address-suggestions' : undefined}
           aria-activedescendant={suggestionIndex >= 0 ? 'suggestion-' + suggestionIndex : undefined}
