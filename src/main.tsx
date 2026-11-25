@@ -43,7 +43,7 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
   const [accent, setAccent] = useState(modal.kind === 'workspace' ? modal.space?.accent ?? accents[0] : accents[0])
   const current = browser?.workspaces.find(space => space.id === browser.workspaceId)
   const [profileId, setProfileId] = useState(current?.profileId ?? current?.id ?? '')
-  const [icon, setIcon] = useState(modal.kind === 'favorite' ? modal.favorite?.icon ?? '' : modal.kind === 'workspace' ? modal.space?.icon ?? '' : '')
+  const [icon, setIcon] = useState(modal.kind === 'workspace' ? modal.space?.icon ?? '' : '')
   const [busy, setBusy] = useState(false)
   const title = modal.kind === 'workspace' ? (modal.space ? 'Edit Space' : modal.sameProfile ? 'New Space' : 'New profile')
     : modal.kind === 'favorite' ? (modal.favorite ? 'Edit favorite' : 'Add favorite')
@@ -58,7 +58,7 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
         ok = await command('saveWorkspace', modal.space?.id ?? null, name, accent, modal.sameProfile ? profileId : null, icon)
         if (ok && !modal.space) useApp.getState().setPage(null)
         break
-      case 'favorite': ok = await command('saveFavorite', modal.favorite?.id ?? null, url, name, icon); break
+      case 'favorite': ok = await command('saveFavorite', modal.favorite?.id ?? null, url, name, ''); break
       case 'bookmark': ok = await command('saveBookmark', modal.item?.id ?? null, name, url, folder || null); break
       case 'group': ok = await command('addGroup', name, modal.parent); break
       case 'folder': ok = await command('addFolder', name); break
@@ -76,7 +76,6 @@ function Dialog({ modal, close }: { modal: Modal; close: () => void }) {
       </label>}
       {modal.kind === 'favorite' && <>
         <label>Website URL<input type="url" required value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com" /></label>
-        <label>Icon<input value={icon} maxLength={12} placeholder="Optional emoji or short label" onChange={event => setIcon(event.target.value)} /></label>
       </>}
       {modal.kind === 'bookmark' && <>
         <label>Website URL<input required value={url} onChange={event => setUrl(event.target.value)} placeholder="https://example.com" /></label>
@@ -169,6 +168,12 @@ function Browser() {
   const locked = pendingPin ?? browser?.settings.keepSidebarOpen ?? false
   const welcome = browser?.welcomePending ?? false
   const isMac = window.lexn.platform === 'darwin'
+  useEffect(() => {
+    if (!welcome) return
+    setPage(null)
+    setMenu(null)
+    setPalette(null)
+  }, [welcome, setPage])
   const collapsed = welcome || (!locked && !manualSidebar && !hoverSidebar)
   const topToolbar = browser?.settings.topToolbar ?? false
   const overlay = Boolean(welcome || modal || context || palette || favoriteMenu || dragging)
@@ -522,12 +527,13 @@ function Browser() {
           remove={id => setSplitIds(splitIds.filter(item => item !== id))} add={() => setPalette('split')} />}
         {page === 'passwords' && <Passwords key={space.profileId ?? space.id} entries={browser.passwords} currentOrigin={activeUrl.startsWith('https://') ? new URL(activeUrl).origin : undefined} />}
         {page === 'extensions' && <div className="management">
-          <header className="page-head"><span className="page-icon"><Puzzle size={24} /></span><div><h1>Extensions</h1><p>Extensions installed in this Profile</p></div>
+          <header className="page-head"><span className="page-icon"><Puzzle size={24} /></span><div><h1>Extensions</h1><p>Unpacked extensions for this Profile. Compatibility varies.</p></div>
             <button type="button" className="primary" onClick={() => { void command('loadExtension') }}>Load unpacked</button>
           </header>
           {!browser.extensions.length && <p className="muted">No extensions installed.</p>}
           <div className="records">{browser.extensions.map(extension => <article className="record" key={extension.id}>
             <div className="record-link"><strong>{extension.name}</strong><span>{extension.version}</span></div>
+            {extension.options && <button type="button" className="secondary" onClick={() => { void command('runExtension', extension.id, true) }}>Options</button>}
             {extension.popup && <button type="button" className="secondary" onClick={() => { void command('runExtension', extension.id) }}>Open</button>}
             <button type="button" className="secondary" onClick={() => { void command('removeExtension', extension.id) }}>Remove</button>
           </article>)}</div>
@@ -536,8 +542,7 @@ function Browser() {
         {page === 'bookmarks' && <BookmarksPage key={space.id} browser={browser} open={navigate} edit={item => setModal({ kind: 'bookmark', item })} addFolder={() => setModal({ kind: 'folder' })} />}
         {page === 'history' && <HistoryPage key={space.id} open={navigate} confirm={action => confirm('Clear history', 'Delete all recorded visits from this profile.', action)} />}
         {page === 'downloads' && <DownloadsPage browser={browser} />}
-        {page === 'settings' && <Settings key={profileId} browser={browser} confirm={confirm} section={settingsSection} setSection={setSettingsSection} goHome={goHome} />}
-        {!splitVisible && !page && !active?.error && (!active || active.url === HOME) && <Home key={profileId + ':' + (active?.id ?? '')}
+        {!splitVisible && (!page || page === 'settings') && !active?.error && (!active || active.url === HOME) && <Home key={profileId + ':' + (active?.id ?? '')}
           settings={browser.settings} navigate={navigate} openHistory={() => open('history')}
           customize={() => { open('settings'); setSettingsSection('New Tab') }} />}
         {!splitVisible && !page && active?.error && <div className="page-error">
@@ -608,6 +613,16 @@ function Browser() {
       }}><option value="">Ungrouped</option>{browser.groups.filter(group => group.workspaceId === space.id).map(group =>
         <option key={group.id} value={group.id}>{group.name}</option>)}</select></label>
       <button type="button" onClick={() => { void command('closeTab', context.tab.id); setContext(null) }}><X size={15} /> Close tab</button>
+    </div>}
+    {page === 'settings' && <div className="overlay settings-overlay" onMouseDown={event => {
+      if (event.target === event.currentTarget) setPage(null)
+    }}>
+      <section className="settings-popup" role="dialog" aria-modal="true" aria-label="Settings" tabIndex={-1}
+        ref={element => { if (element && !element.contains(document.activeElement) && !modal) element.focus() }}
+        onKeyDown={event => { if (event.key === 'Escape' && !modal) setPage(null) }}>
+        <Settings key={profileId} browser={browser} confirm={confirm} section={settingsSection} setSection={setSettingsSection}
+          goHome={goHome} close={() => setPage(null)} openPage={setPage} />
+      </section>
     </div>}
     {modal && <Dialog modal={modal} close={() => setModal(null)} />}
     {welcome && <Welcome animate={animate} openImport={() => {

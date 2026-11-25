@@ -1,5 +1,6 @@
+import { browserImportItems, type BrowserImportItem } from '../shared/model'
 import { useEffect, useState } from 'react'
-import { ArrowDownToLine, FileText, FolderOpen, Globe2, KeyRound } from 'lucide-react'
+import { FileText, FolderOpen, KeyRound } from 'lucide-react'
 import type { BrowserBrand, BrowserImportKind, BrowserImportSource, Workspace } from '../shared/model'
 
 const browserOptions: BrowserBrand[] = ['Chrome', 'Arc', 'Dia', 'Opera', 'Opera GX', 'Ardia', 'Edge', 'Brave', 'Vivaldi', 'Chromium']
@@ -23,7 +24,9 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
   const [sources, setSources] = useState<BrowserImportSource[]>([])
   const [brand, setBrand] = useState<BrowserBrand>('Chrome')
   const [source, setSource] = useState('')
+  const [allProfiles, setAllProfiles] = useState(true)
   const [destination, setDestination] = useState(profileId)
+  const [items, setItems] = useState<BrowserImportItem[]>([...browserImportItems])
   const [includePasswords, setIncludePasswords] = useState(false)
   const [busy, setBusy] = useState(false)
   const [scanning, setScanning] = useState(true)
@@ -37,6 +40,8 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
     }).finally(() => { if (current) setScanning(false) })
     return () => { current = false }
   }, [])
+  const detected = new Set(sources.map(item => item.browser))
+  const orderedBrands = [...browserOptions].sort((a, b) => Number(detected.has(b)) - Number(detected.has(a)))
   const profiles = sources.filter(item => item.browser === brand)
   const selected = profiles.some(item => item.id === source) ? source : profiles[0]?.id ?? ''
   const destinations = workspaces.filter(item => !item.profileId)
@@ -47,14 +52,14 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
     setBusy(true)
     setStatus('')
     try {
-      const value = kind === 'browser' ? selected : kind === 'passwords' ? destination : brand
-      const result = await window.lexn.importBrowserData(kind, value, true)
+      const value = kind === 'browser' || kind === 'profile' ? selected : kind === 'passwords' ? destination : brand
+      const result = await window.lexn.importBrowserData(kind, value, true, includePasswords, items)
       if (!result) return
       if (result.profiles?.length) setDestination(result.profiles.length === 1 ? result.profiles[0].id : '')
       const notes = [...result.notes]
       let passwordCount = result.passwords
       if (includePasswords && kind !== 'passwords') {
-        for (const item of result.profiles ?? [{ id: profileId, name: currentProfile }]) {
+        for (const item of result.passwordFallbackProfiles ?? result.profiles ?? [{ id: profileId, name: currentProfile }]) {
           setStatus('Choose the password CSV for ' + item.name + '.')
           try {
             const accountData = await window.lexn.importBrowserData('passwords', item.id)
@@ -86,54 +91,72 @@ export function BrowserImport({ profileId, workspaces }: { profileId: string; wo
   }
 
   return <section className="import-browser" aria-label="Browser data import">
-    <div className="import-intro"><div><h2>Bring your browser data</h2><p>Create matching Drew Profiles or copy individual items into <strong>{currentProfile}</strong>. Duplicate entries are skipped.</p></div><ArrowDownToLine size={24} aria-hidden="true" /></div>
-    <h3>Choose your browser</h3>
+    <h3>Source browser</h3>
     <div className="browser-brand-grid" role="group" aria-label="Source browser">
-      {browserOptions.map(item => <button key={item} type="button" aria-pressed={item === brand} disabled={busy}
-        onClick={() => { setBrand(item); setStatus('') }}>
+      {orderedBrands.map(item => <button key={item} type="button" aria-pressed={item === brand} disabled={busy}
+        onClick={() => { setBrand(item); setSource(''); setAllProfiles(true); setStatus('') }}>
         <BrowserIcon brand={item} /><span>{item}</span>
-        {sources.some(source => source.browser === item) && <small>Detected</small>}
+        {detected.has(item) && <small>Detected</small>}
       </button>)}
     </div>
-    <div className="import-source-panel">
-      <div className="setting">
-        <div><strong>Import directly from {brand}</strong><p>{scanning ? 'Looking for local browser profiles…'
-          : profiles.length ? 'Create separate Drew Profiles with available bookmarks, history, Favorites, pinned tabs, and colors.' : 'No local profile detected. You can choose a folder or an export below.'}</p></div>
-        {profiles.length > 0 && <div className="setting-control">
-          <select aria-label="Source profile" value={selected} disabled={busy} onChange={event => setSource(event.target.value)}>
-            {profiles.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-          </select>
-          <button type="button" className="secondary" disabled={busy} onClick={() => { void run('browser') }}>Copy bookmarks and history</button>
-          <button type="button" className="primary" disabled={busy} onClick={() => { void run('profiles') }}>Import all Profiles</button>
-        </div>}
+
+    <div className="import-source-panel import-options">
+      <div className="import-profile-row">
+        <strong>{brand} profiles</strong>
+        {profiles.length > 0 ? <select aria-label="Source profile" value={allProfiles ? '' : selected} disabled={busy}
+          onChange={event => {
+            setAllProfiles(!event.target.value)
+            if (event.target.value) setSource(event.target.value)
+          }}>
+          <option value="">All profiles ({profiles.length})</option>
+          {profiles.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+        </select> : <span className="muted">{scanning ? 'Looking for profiles…' : 'No local profiles detected'}</span>}
       </div>
-      <p className="import-guide"><Globe2 size={15} aria-hidden="true" />{exportHelp[brand] ?? 'Choose the browser’s Chromium profile folder, or select an HTML bookmarks export.'}</p>
+      <fieldset className="import-file-actions import-items">
+        <legend>What to import</legend>
+        {browserImportItems.map(item => <label className="import-guide" key={item}>
+          <input type="checkbox" checked={items.includes(item)} disabled={busy} onChange={event => {
+            setItems(previous => event.target.checked ? [...previous, item] : previous.filter(value => value !== item))
+          }} />{{ bookmarks: 'Bookmarks', history: 'History', favorites: 'Favorites', pinned: 'Pinned tabs', tabs: 'Open tabs' }[item]}
+        </label>)}
+        <label className="import-guide">
+          <input type="checkbox" checked={includePasswords} disabled={busy} onChange={event => setIncludePasswords(event.target.checked)} />
+          Include saved passwords
+        </label>
+      </fieldset>
+      {profiles.length > 0 && <div className="import-primary">
+        <button type="button" className="primary" disabled={busy || (!items.length && !includePasswords)}
+          onClick={() => { void run(allProfiles ? 'profiles' : 'profile') }}>
+          {allProfiles ? 'Import all Profiles' : 'Import selected Profile'}
+        </button>
+      </div>}
     </div>
-    <label className="import-guide">
-      <input type="checkbox" checked={includePasswords} disabled={busy} onChange={event => setIncludePasswords(event.target.checked)} />
-      Include password CSVs in this import. Drew asks for each Profile’s export. Cancel skips that Profile’s passwords.
-    </label>
-    <h3>Import from a file or folder</h3>
-    <div className="import-file-actions">
-      <button type="button" className="secondary" disabled={busy} onClick={() => { void run('folder') }}><FolderOpen size={16} />Choose Profile folder</button>
-      <button type="button" className="secondary" disabled={busy} onClick={() => { void run('profile-folder') }}><FolderOpen size={16} />Import Profiles from folder</button>
-      <button type="button" className="secondary" disabled={busy} onClick={() => { void run('profile-markdown') }}><FileText size={16} />Import Profiles or Spaces</button>
-      <button type="button" className="secondary" disabled={busy} onClick={() => { void run('bookmarks') }}><FileText size={16} />Import links file</button>
-    </div>
-    <p className="muted import-file-note">Links files can be bookmarks HTML or Markdown.</p>
-    <div className="import-source-panel">
-      <div className="setting">
-        <div><strong>Saved passwords from {brand}</strong><p>Export passwords from each source Profile. Choose its matching Drew Profile before importing its CSV. Drew encrypts passwords and keeps each website and username separate.</p></div>
-        <div className="setting-control">
-          <select aria-label="Password destination Profile" value={destination} disabled={busy} onChange={event => setDestination(event.target.value)}>
-            <option value="" disabled>Choose matching Profile</option>
-            {destinations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <button type="button" className="secondary" disabled={busy || !target} onClick={() => { void run('passwords') }}><KeyRound size={16} />Import password CSV</button>
-        </div>
+
+    <details className="import-disclosure">
+      <summary>Other import options</summary>
+      {exportHelp[brand] && <p className="import-guide">{exportHelp[brand]}</p>}
+      <div className="import-file-actions">
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('profile-folder') }}><FolderOpen size={16} />Import Profiles from folder</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('profile-markdown') }}><FileText size={16} />Import Profiles or Spaces</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('bookmarks') }}><FileText size={16} />Import links file</button>
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('folder') }}>Copy from Profile folder</button>
       </div>
-      <p className="import-guide">The exported CSV contains readable passwords. Delete the export when you finish importing it.</p>
-    </div>
+      {selected && <div className="import-profile-row">
+        <span className="muted">Copy into {currentProfile}</span>
+        <button type="button" className="secondary" disabled={busy} onClick={() => { void run('browser') }}>Copy bookmarks and history</button>
+      </div>}
+    </details>
+    <details className="import-disclosure">
+      <summary>Import passwords from CSV</summary>
+      <p className="import-guide">Select the matching Drew Profile. Delete the readable CSV after importing.</p>
+      <div className="import-file-actions">
+        <select aria-label="Password destination Profile" value={destination} disabled={busy} onChange={event => setDestination(event.target.value)}>
+          <option value="" disabled>Choose matching Profile</option>
+          {destinations.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}
+        </select>
+        <button type="button" className="secondary" disabled={busy || !target} onClick={() => { void run('passwords') }}><KeyRound size={16} />Import password CSV</button>
+      </div>
+    </details>
     {busy && <p role="status">Importing…</p>}
     {status && <p role="status" className="import-status">{status}</p>}
   </section>

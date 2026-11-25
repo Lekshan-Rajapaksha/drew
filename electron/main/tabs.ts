@@ -1,11 +1,12 @@
 import { writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { BrowserWindow, dialog, View, WebContentsView, type Rectangle, type Session } from 'electron'
+import { BrowserWindow, dialog, powerMonitor, View, WebContentsView, type Rectangle, type Session } from 'electron'
 import { HOME, type ArchivedTab, type PaneRect, type SavedTab, type SplitPane, type Tab, type Workspace } from '../../shared/model.js'
 import { originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
 import { fillSavedLogin } from './loginFill.js'
+import { showPrintPreview } from './printPreview.js'
 import { showPageMenu } from './pageMenu.js'
 
 interface LiveTab {
@@ -71,6 +72,10 @@ export class Tabs {
   }
   storageFor(id: string) {
     return this.db.one<{ profileId: string | null }>('SELECT profileId FROM workspaces WHERE id = ?', id)?.profileId ?? id
+  }
+  get welcomePending() { return this.db.get('welcomePending', false) }
+  finishOnboarding() {
+    this.db.set('welcomePending', false)
   }
   get profileId() { return this.storageFor(this.workspaceId) }
   get managesSavedTabs() { return this.sessionId === 'main' }
@@ -154,7 +159,15 @@ export class Tabs {
       const history = wc.navigationHistory
       if (direction === 'back' ? !history.canGoBack() : !history.canGoForward()) return
       lastHistorySwipe = now
-      this.action(state.id, direction)
+      const { batterySaver, motion } = this.db.settings(loginProfile)
+      const animate = motion !== 'off' && batterySaver !== 'on' && (batterySaver !== 'battery' || !powerMonitor.onBatteryPower)
+      wc.send('lexn:history-swipe-cue', direction, animate)
+      const source = wc.getURL()
+      setTimeout(() => {
+        if (this.shuttingDown || tab.view !== view || !this.attached.has(view) || wc.isDestroyed() ||
+            !this.window.isFocused() || wc.getURL() !== source) return
+        this.action(state.id, direction)
+      }, 140)
     })
     let displayable = state.url !== HOME && !state.error
     const update = () => {
@@ -275,6 +288,7 @@ export class Tabs {
       if (favicon === state.favicon) return
       state.favicon = favicon
       this.persist(state)
+      if (favicon) this.db.run('UPDATE favorites SET favicon = ? WHERE profileId = ? AND url = ?', favicon, this.storageFor(state.workspaceId), state.url)
       update()
     })
     wc.on('did-fail-load', (_event, code, description, url, main) => {
@@ -354,9 +368,9 @@ export class Tabs {
     this.tabChanged(this.active()!.state)
   }
 
-  print() {
+  async print() {
     const contents = this.active()?.view?.webContents
-    if (contents && webUrl(contents.getURL())) contents.print()
+    if (contents && webUrl(contents.getURL())) await showPrintPreview(this.window, contents)
   }
 
   async savePdf() {

@@ -10,10 +10,10 @@ import type { BrowserBrand, BrowserImportSource } from '../../shared/model.js'
 
 export type Link = { url: string; title: string; folder: string }
 export type Entry = { url: string; title: string; visitedAt: number }
-export type Source = BrowserImportSource & { path: string }
+export type Source = BrowserImportSource & { path: string; root?: string; folder?: string; accent?: string }
 const maxFileSize = 16 * 1024 * 1024
 
-export async function readImportFile(path: string) {
+export async function readImportBytes(path: string) {
   const file = await open(path, constants.O_RDONLY | (constants.O_NONBLOCK ?? 0))
   try {
     const info = await file.stat()
@@ -26,10 +26,15 @@ export async function readImportFile(path: string) {
       length += bytesRead
     }
     if ((await file.stat()).size !== info.size || length !== info.size) throw new Error('The file changed during import. Export it again and retry.')
-    try { return new TextDecoder('utf-8', { fatal: true }).decode(data) }
-    catch { throw new Error('Use a UTF-8 browser export file.') }
-    finally { data.fill(0) }
+    return data
   } finally { await file.close() }
+}
+
+export async function readImportFile(path: string) {
+  const data = await readImportBytes(path)
+  try { return new TextDecoder('utf-8', { fatal: true }).decode(data) }
+  catch { throw new Error('Use a UTF-8 browser export file.') }
+  finally { data.fill(0) }
 }
 
 const entities: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' }
@@ -127,6 +132,7 @@ export async function detectSources(): Promise<Source[]> {
     ['Arc', 'Arc/User Data'],
     ['Dia', 'Dia/User Data'],
     ['Ardia', 'Ardia/User Data'],
+    ...(mac ? [['Ardia', 'dev.ardia.Ardia/Chromium'], ['Ardia', 'com.ardia.browser/Chromium']] as [BrowserBrand, string][] : []),
     ['Opera', mac ? 'com.operasoftware.Opera' : 'opera'],
     ['Opera GX', mac ? 'com.operasoftware.OperaGX' : 'opera-gx'],
   ]
@@ -146,21 +152,34 @@ export async function detectSources(): Promise<Source[]> {
 
 export async function scanChromiumProfiles(parent: string, browser: BrowserBrand): Promise<Source[]> {
   const dirs = await readdir(parent, { withFileTypes: true }).catch(() => [])
-  const localState = await readImportFile(join(parent, 'Local State')).then(contents => {
-    const state = JSON.parse(contents) as { profile?: { info_cache?: Record<string, { name?: unknown }> } }
-    return state.profile?.info_cache ?? {}
-  }).catch(() => ({} as Record<string, { name?: unknown }>))
-  const folders = ['', ...dirs.filter(item => item.isDirectory() && /^(Default|Profile \d+)$/.test(item.name))
-    .map(item => item.name).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))]
+  const profileInfo = await readImportFile(join(parent, 'Local State')).then(contents => {
+    const state = JSON.parse(contents) as { profile?: {
+      info_cache?: Record<string, { name?: unknown; profile_highlight_color?: unknown; default_avatar_fill_color?: unknown }>
+      profiles_order?: unknown; last_used?: unknown
+    } }
+    return state?.profile
+  }).catch(() => undefined)
+  const info = profileInfo?.info_cache ?? {}
+  const order = Array.isArray(profileInfo?.profiles_order) ? profileInfo.profiles_order : []
+  const available = dirs.filter(item => item.isDirectory() && item.name !== 'Guest Profile' && item.name !== 'System Profile').map(item => item.name)
+  const side = await readdir(join(parent, '_side_profiles'), { withFileTypes: true }).catch(() => [])
+  const sidePaths = side.filter(item => item.isDirectory()).map(item => '_side_profiles/' + item.name)
+  const allowed = new Set([...available, ...sidePaths])
+  const folders = ['', ...new Set([profileInfo?.last_used, ...order, ...Object.keys(info),
+    ...available.filter(name => /^(Default|Profile .+)$/.test(name)).sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    ...sidePaths].filter((name): name is string => typeof name === 'string' && allowed.has(name)))]
   return (await Promise.all(folders.map(async folder => {
     const path = join(parent, folder)
-    const label = localState[folder]?.name
-    const hasData = await isFile(join(path, 'Bookmarks')) || await isFile(join(path, 'History'))
-    if (!hasData && !(await isFile(join(path, 'Preferences')))) return []
+    const entry = info[folder] ?? (folder ? undefined : info.Default)
+    const matches = await Promise.all(['Bookmarks', 'History', 'Preferences'].map(name => isFile(join(path, name))))
+    if (!matches.some(Boolean)) return []
     const canonical = await realpath(path).catch(() => path)
     const id = createHash('sha256').update(canonical).digest('hex')
-    return [{ id, label: typeof label === 'string' && label.trim() ? label.trim().slice(0, 64) : folder || basename(parent),
-      browser, path }]
+    const color = entry?.profile_highlight_color ?? entry?.default_avatar_fill_color
+    const accent = typeof color === 'number' && Number.isInteger(color) && color >= -2147483648 && color <= 0xffffffff &&
+      color >>> 24 === 255 && (color & 0xffffff) !== 0 ? '#' + (color & 0xffffff).toString(16).padStart(6, '0') : undefined
+    return [{ id, label: typeof entry?.name === 'string' && entry.name.trim() ? entry.name.trim().slice(0, 64) : basename(path),
+      browser, path, root: parent, folder: folder || basename(parent), accent }]
   }))).flat()
 }
 
@@ -168,7 +187,11 @@ function chromiumHistory(path: string): Entry[] {
   const source = new DatabaseSync(path, { readOnly: true })
   try {
     source.exec('PRAGMA trusted_schema = OFF; PRAGMA query_only = ON;')
-    const rows = source.prepare('SELECT url, title, last_visit_time / 1000 AS visit_millis FROM urls ORDER BY last_visit_time DESC LIMIT 5000').all() as
+    const columns = source.prepare('PRAGMA table_info(urls)').all()
+    const visible = columns.some(column => column.name === 'hidden') ? ' AND hidden = 0' : ''
+    const rows = source.prepare(`SELECT url, title, last_visit_time / 1000 AS visit_millis FROM urls
+      WHERE last_visit_time > 0 AND (url LIKE 'http://%' OR url LIKE 'https://%')${visible}
+      ORDER BY last_visit_time DESC LIMIT 5000`).all() as
       { url: string; title: string | null; visit_millis: number | null }[]
     return rows.flatMap(row => {
       const url = webUrl(row.url)

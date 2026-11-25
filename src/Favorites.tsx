@@ -1,12 +1,8 @@
 import { useState } from 'react'
-import { CalendarDays, Code2, Globe, HardDrive, Mail, Music2, Play, Plus, Search } from 'lucide-react'
 import { webUrl } from '../shared/navigation'
 import type { Favorite } from '../shared/model'
 import { command } from './state'
-import { Favicon, Tool } from './ui'
-
-const shortcutIcons = { google: Search, youtube: Play, github: Code2, wikipedia: Globe, mail: Mail, calendar: CalendarDays, drive: HardDrive, music: Music2 }
-const colors = ['#9ec6ff', '#ff8298', '#d0bcff', '#9ae6d7', '#f9a78e', '#b7bbff', '#a9da9e', '#a5eab2']
+import { Favicon } from './ui'
 
 export function Favorites({ items, size, activeUrl, open, edit, menu }: {
   items: Favorite[]; size: string; activeUrl?: string
@@ -39,24 +35,20 @@ export function Favorites({ items, size, activeUrl, open, edit, menu }: {
     if (!(event.relatedTarget instanceof Node) || !event.currentTarget.contains(event.relatedTarget)) setTarget(null)
   }}>
     <div className="favorites-heading"><span>Favorites</span>
-      <Tool label="Add favorite" onClick={() => edit()}><Plus size={15} /></Tool>
+      <button type="button" className="favorite-add-text" onClick={() => edit()}>Add favorite</button>
     </div>
-    <div className={'favorites-grid favorites-' + size} {...dropZone(null)}>
-      {items.map((favorite, index) => {
-        const Icon = shortcutIcons[favorite.id as keyof typeof shortcutIcons]
-        return <button key={favorite.id} type="button" aria-label={favorite.title} title={favorite.title}
+    <div className={'favorites-grid favorites-' + size + (target === 'end' ? ' favorites-drop-end' : '')} {...dropZone(null)}>
+      {items.map(favorite => <button key={favorite.id} type="button" aria-label={favorite.title} title={favorite.title}
           className={target === favorite.id ? 'favorite-drop-target' : undefined}
           aria-pressed={favorite.url === activeUrl} onClick={() => open(favorite.id)} onContextMenu={event => menu(event, favorite)}
           draggable onDragStart={event => {
             event.dataTransfer.effectAllowed = 'move'
             event.dataTransfer.setData('application/x-lexn-favorite', favorite.id)
           }} onDragEnd={() => setTarget(null)}
-          {...dropZone(favorite.id)} style={{ '--favorite-accent': colors[index % colors.length] } as React.CSSProperties}>
-          {favorite.icon || <Favicon tab={favorite} fallback={Icon ? <Icon size={18} /> : favorite.title.slice(0, 1).toUpperCase()} />}
-        </button>
-      })}
-      <button className={'favorite-add' + (target === 'end' ? ' favorite-drop-target' : '')} type="button" aria-label="Add or drop favorite" title="Add or drop a tab or link"
-        onClick={() => edit()} {...dropZone(null)}><Plus size={18} /></button>
+          {...dropZone(favorite.id)}>
+          <Favicon tab={favorite} fallback={null} />
+        </button>)}
+
     </div>
   </section>
 }

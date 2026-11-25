@@ -234,3 +234,110 @@ test('the active Space’s Profile supplies a shared sidebar pin and width on up
     upgraded.close()
   }
 })
+
+test('browser Profiles import saved Chromium sessions and fall back from an incomplete newer file', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'drew-session-import-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const profile = join(root, 'Work Account')
+  mkdirSync(join(profile, 'Sessions'), { recursive: true })
+  writeFileSync(join(profile, 'Preferences'), '{}')
+  writeFileSync(join(root, 'Local State'), JSON.stringify({ profile: { last_used: 'Work Account',
+    info_cache: { 'Work Account': { name: 'Office', profile_highlight_color: 0xff225599 }, '../other': { name: 'Invalid' } } } }))
+  const integers = (...values) => {
+    const payload = Buffer.alloc(values.length * 4)
+    values.forEach((value, index) => payload.writeInt32LE(value, index * 4))
+    return payload
+  }
+  const command = (id, payload = Buffer.alloc(0)) => {
+    const head = Buffer.alloc(3)
+    head.writeUInt16LE(payload.length + 1)
+    head[2] = id
+    return Buffer.concat([head, payload])
+  }
+  const nav = (tab, index, address) => {
+    const url = Buffer.from(address)
+    const title = Buffer.from('Read later', 'utf16le')
+    const payload = Buffer.concat([integers(tab, index, url.length), url,
+      Buffer.alloc((4 - url.length % 4) % 4), integers(title.length / 2), title])
+    return command(6, Buffer.concat([integers(payload.length), payload]))
+  }
+  const header = Buffer.concat([Buffer.from('SNSS'), integers(3)])
+  const records = [command(9, integers(1, 0)), command(0, integers(1, 10)), command(12, Buffer.concat([integers(10), Buffer.from([1])])),
+    nav(10, 0, 'https://example.org/old'), nav(10, 1, 'https://example.org/current'), command(7, integers(10, 1)),
+    command(0, integers(1, 20)), nav(20, 0, 'https://example.org/open'),
+    command(0, integers(1, 30)), nav(30, 0, 'https://example.org/closed'), command(16, integers(30))]
+  writeFileSync(join(profile, 'Sessions', 'Session_2'), Buffer.concat([header, ...records]))
+  writeFileSync(join(profile, 'Sessions', 'Session_1'), Buffer.concat([header, ...records, command(255)]))
+  const sources = await scanChromiumProfiles(root, 'Chrome')
+  assert.deepEqual(sources.map(source => source.label), ['Office'])
+  const result = await chromiumProfile(sources[0])
+  assert.equal(result.accent, '#225599')
+  assert.deepEqual(result.pinned.map(item => item.url), ['https://example.org/current'])
+  assert.deepEqual(result.tabs.map(item => item.url), ['https://example.org/open'])
+})
+
+test('Arc sidebar import preserves Spaces and pinned folders within the matching Profile', async t => {
+  const root = mkdtempSync(join(tmpdir(), 'drew-arc-sidebar-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const parent = join(root, 'User Data')
+  const profile = join(parent, 'Default')
+  mkdirSync(profile, { recursive: true })
+  writeFileSync(join(profile, 'Preferences'), '{}')
+  const item = (id, name, address, parentID) => ({ id, title: name, parentID, data: { tab: { savedURL: address } } })
+  writeFileSync(join(root, 'StorableSidebar.json'), JSON.stringify({ sidebar: { containers: [{ global: {} }, {
+    items: [{ id: 'pins', childrenIds: ['folder'] }, { id: 'folder', title: 'Reference', data: { list: {} } },
+      item('pinned', 'Handbook', 'https://example.org/docs', 'folder'), { id: 'today', childrenIds: ['open'] },
+      item('open', 'Inbox', 'https://example.org/inbox'), { id: 'favorites', childrenIds: ['favorite'] },
+      item('favorite', 'Calendar', 'https://example.org/calendar')],
+    spaces: [{ id: 'studio', title: 'Studio', profile: { default: {} }, containerIDs: ['pinned', 'pins', 'unpinned', 'today'] },
+      { id: 'private', title: 'Other Account', profile: { custom: { _0: { directoryBasename: 'Profile 2' } } }, containerIDs: ['pinned', 'pins'] }],
+    topAppsContainerIDs: [{ default: {} }, 'favorites'],
+  }] } }))
+  const [source] = await scanChromiumProfiles(parent, 'Arc')
+  const imported = await chromiumProfile(source)
+  const [manual] = await scanChromiumProfiles(profile, 'Arc')
+  assert.deepEqual((await chromiumProfile(manual)).spaces, imported.spaces)
+  const db = new Database(':memory:')
+  try {
+    const first = saveBrowserProfiles(db, [imported])
+    const office = first.results.profiles[0].id
+    const spaces = db.all('SELECT id, name FROM workspaces WHERE profileId = ?', office)
+    assert.deepEqual(spaces.map(space => space.name), ['Studio'])
+    assert.equal(first.results.favorites, 1)
+    assert.equal(first.results.pinned, 1)
+    assert.equal(first.results.tabs, 1)
+    assert.equal(db.one('SELECT name FROM tab_groups WHERE workspaceId=?', spaces[0].id).name, 'Reference')
+    assert.equal(saveBrowserProfiles(db, [imported]).createdTabs.length, 0)
+  } finally { db.close() }
+})
+
+test('macOS-format browser passwords use the source browser key and skip blocked or unsupported records', async t => {
+  const { createCipheriv, pbkdf2Sync } = await import('node:crypto')
+  const { readBrowserPasswords } = await import('../out/electron/main/browserPasswords.js')
+  const path = mkdtempSync(join(tmpdir(), 'drew-keychain-import-fixture-'))
+  t.after(() => rmSync(path, { recursive: true, force: true }))
+  const secret = Buffer.from('synthetic browser storage value')
+  const key = pbkdf2Sync(secret, 'saltysalt', 1003, 16, 'sha1')
+  const encrypt = value => {
+    const cipher = createCipheriv('aes-128-cbc', key, Buffer.alloc(16, 32))
+    return Buffer.concat([Buffer.from('v10'), cipher.update(value), cipher.final()])
+  }
+  const database = new DatabaseSync(join(path, 'Login Data'))
+  database.exec('CREATE TABLE logins (origin_url TEXT, username_value TEXT, password_value BLOB, blacklisted_by_user INTEGER)')
+  const insert = database.prepare('INSERT INTO logins VALUES (?, ?, ?, ?)')
+  insert.run('https://example.org/signin', 'alice', encrypt('fixture-password-one'), 0)
+  insert.run('https://example.org/signin', 'bob', encrypt('fixture-password-two'), 0)
+  insert.run('https://example.org', 'blocked', encrypt('must-be-ignored'), 1)
+  insert.run('https://example.org', 'unsupported', Buffer.concat([Buffer.from('v20'), Buffer.alloc(16)]), 0)
+  database.close()
+  const source = { id: 'fixture', label: 'Test Profile', path, browser: 'Ardia' }
+  const result = await readBrowserPasswords(source, async account => {
+    assert.equal(account, 'Ardia')
+    return Buffer.from(secret)
+  })
+  assert.equal(result.skipped, 1)
+  assert.deepEqual(result.entries, [
+    { origin: 'https://example.org', username: 'alice', password: 'fixture-password-one' },
+    { origin: 'https://example.org', username: 'bob', password: 'fixture-password-two' },
+  ])
+})

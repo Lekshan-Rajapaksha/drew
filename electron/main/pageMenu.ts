@@ -1,3 +1,4 @@
+import { showPrintPreview } from './printPreview.js'
 import { clipboard, dialog, Menu, type BrowserWindow, type ContextMenuParams, type MenuItemConstructorOptions, type WebContents } from 'electron'
 import { engines, type Settings } from '../../shared/model.js'
 import { webUrl } from '../../shared/navigation.js'
@@ -72,7 +73,7 @@ export function showPageMenu(window: BrowserWindow, contents: WebContents, param
       const result = await dialog.showSaveDialog(window, { defaultPath: 'webpage.html', filters: [{ name: 'Web page', extensions: ['html'] }] })
       if (!result.canceled && result.filePath && current()) await contents.savePage(result.filePath, 'HTMLOnly')
     }),
-    item('Print…', () => contents.print()),
+    item('Print…', () => showPrintPreview(window, contents)),
     item('Copy Page Address', () => location && clipboard.writeText(location)),
     item('Select All', () => contents.selectAll(), edit.canSelectAll),
   ])

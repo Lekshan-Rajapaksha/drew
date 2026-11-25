@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import {
   Bell, ChevronRight, Cookie, FolderOpen, Import, Info, Keyboard, LayoutTemplate, Palette,
-  Settings2, Shield, SlidersHorizontal, Trash2,
+  Settings2, Shield, SlidersHorizontal, Trash2, KeyRound, Puzzle, X, PanelsTopLeft,
 } from 'lucide-react'
 import type { BrowserState, Permission, Settings as Preferences, SiteCookie } from '../shared/model'
 import { HOME, profileThemes, themeAccents } from '../shared/model'
@@ -23,17 +23,19 @@ const sectionDetails = {
   Appearance: { icon: Palette, description: 'Navigation layouts, colors, and motion for this Profile.' },
   'New Tab': { icon: LayoutTemplate, description: 'Customize the first page you see when you open a tab.' },
   'Keyboard Shortcuts': { icon: Keyboard, description: 'Set the keys you use to get around Drew.' },
+  Tabs: { icon: PanelsTopLeft, description: 'Automatic archiving, and background tab performance.' },
   Privacy: { icon: Shield, description: 'Manage site permissions, browser data, and embedded requests.' },
   Notifications: { icon: Bell, description: 'Choose which websites can send notifications.' },
   Cookies: { icon: Cookie, description: 'Review and remove cookies stored by websites.' },
-  Import: { icon: Import, description: 'Bring your data from another browser, or back up a Space.' },
+  Profiles: { icon: KeyRound, description: 'Saved passwords and extensions for the current Profile.' },
+  Import: { icon: Import, description: 'Move data from another browser into Drew.' },
   About: { icon: Info, description: 'Version, software updates, and default-browser setup.' },
 }
 export type SettingsSection = keyof typeof sectionDetails
 const sectionGroups: { label: string; items: SettingsSection[] }[] = [
-  { label: 'Personalize', items: ['General', 'Appearance', 'New Tab', 'Keyboard Shortcuts'] },
+  { label: 'Personalize', items: ['General', 'Appearance', 'New Tab', 'Tabs', 'Keyboard Shortcuts'] },
   { label: 'Site controls', items: ['Privacy', 'Notifications', 'Cookies'] },
-  { label: 'Data and app', items: ['Import', 'About'] },
+  { label: 'Data and app', items: ['Profiles', 'Import', 'About'] },
 ]
 
 const gradients = [
@@ -62,8 +64,8 @@ function LayoutPreview({ layout, tabs }: { layout: typeof layouts[number]['id'];
   </div>
 }
 
-export function Settings({ browser, confirm, section, setSection, goHome }: {
-  browser: BrowserState; confirm: Confirm; section: SettingsSection; setSection: (section: SettingsSection) => void; goHome: () => void
+export function Settings({ browser, confirm, section, setSection, goHome, close, openPage }: {
+  browser: BrowserState; confirm: Confirm; section: SettingsSection; setSection: (section: SettingsSection) => void; goHome: () => void; close: () => void; openPage: (page: 'passwords' | 'extensions') => void
 }) {
   const settings = browser.settings
   const space = browser.workspaces.find(item => item.id === browser.workspaceId)
@@ -117,7 +119,8 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
   return <div className="management settings" ref={settingsScroll}>
     <div className="settings-inner">
       <PageHeader icon={<Settings2 size={24} />} title="Settings"
-        subtitle={profile ? 'Preferences for ' + profile.name : 'Manage Profile preferences.'} />
+        subtitle={profile?.name ?? 'Current Profile'} />
+      <Tool className="settings-close" label="Close settings" onClick={close}><X size={18} /></Tool>
       <div className="settings-layout">
         <div className="settings-navigation">
           <Filter label="Find a section" value={sectionSearch} change={setSectionSearch} />
@@ -137,7 +140,7 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
             {!matching.length && <p className="settings-no-results" role="status">No matching sections.</p>}
           </nav>
         </div>
-        <section className="settings-content" aria-labelledby="settings-section-title">
+        <section key={section} className="settings-content" aria-labelledby="settings-section-title">
           <header className="settings-section-header">
             <span className="settings-section-icon"><SectionIcon size={22} aria-hidden="true" /></span>
             <div><h2 id="settings-section-title">{section}</h2><p>{sectionDetails[section].description}</p></div>
@@ -159,15 +162,25 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
                 {homeSaved && <small role="status">Home page saved</small>}
               </form>
             </Setting>
-            <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
-              {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
-            </Setting>
             {!browser.privateWindow && <Setting label="Open external links in this Profile" detail="Enter exact hostnames, separated by commas.">
               <form className="inline-form" onSubmit={event => { event.preventDefault(); void command('setSetting', 'linkHosts', linkHosts) }}>
                 <input aria-label="Website hostnames" value={linkHosts} placeholder="mail.example.com" maxLength={1024} onChange={event => setLinkHosts(event.target.value)} />
                 <button className="secondary" type="submit">Save</button>
               </form>
             </Setting>}
+            {!browser.privateWindow && <Setting label="Start New" detail="Permanently delete all Drew profiles and browsing data, then return to the welcome screen.">
+            <button type="button" className="secondary destructive" onClick={() => { void command('startNew') }}>Start New</button>
+          </Setting>}
+          <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
+            <Setting label="Download location" detail={settings.downloadPath || 'System Downloads folder'}>
+              {settings.downloadPath && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'downloadPath', '') }}>Reset</button>}
+              <button type="button" className="secondary" onClick={() => { void command('chooseDownloadPath') }}><FolderOpen size={16} /> Choose folder</button>
+            </Setting>
+          </div>}
+          {section === 'Tabs' && <div className="setting-list">
+            <Setting label="Auto-archive Today tabs" detail="Archives inactive, unpinned tabs in Spaces linked to this Profile.">
+              {select('archiveHours', 'Auto-archive Today tabs', { '0': 'Never', '12': '12 hours', '24': '24 hours', '72': '3 days', '168': '7 days' })}
+            </Setting>
             <Setting label="Memory Saver" detail="Sleep eligible background tabs and reload them when selected.">
               {select('memorySaver', 'Memory Saver', { off: 'Off', '15': 'After 15 minutes', '30': 'After 30 minutes', '60': 'After 60 minutes' })}
             </Setting>
@@ -175,11 +188,6 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
               detail="Exact hostnames to exclude from automatic sleep and archiving. Separate multiple sites with commas." />
             <Setting label="Battery Saver" detail="Simplifies motion and sleeps eligible tabs sooner.">
               {select('batterySaver', 'Battery Saver', { off: 'Off', battery: 'On battery', on: 'Always on' })}
-            </Setting>
-            <Setting label="On startup">{select('startup', 'On startup', { restore: 'Restore the previous session', home: 'Open home page in a new tab', blank: 'Open a blank tab' })}</Setting>
-            <Setting label="Download location" detail={settings.downloadPath || 'System Downloads folder'}>
-              {settings.downloadPath && <button type="button" className="secondary" onClick={() => { void command('setSetting', 'downloadPath', '') }}>Reset</button>}
-              <button type="button" className="secondary" onClick={() => { void command('chooseDownloadPath') }}><FolderOpen size={16} /> Choose folder</button>
             </Setting>
           </div>}
           {section === 'Appearance' && <div className="setting-list">
@@ -197,7 +205,7 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
               {toggle('topToolbar', 'Show top toolbar')}
             </Setting>
             {settings.topToolbar && <>
-              <Setting label="Top tab strip" detail="Choose where to show the current Space’s tabs.">
+              <Setting label="Top tab strip">
                 {select('topTabs', 'Top tab strip', { above: 'Above the address bar', below: 'Below the address bar', hidden: 'Hidden' })}
               </Setting>
               <Setting label="Top toolbar buttons">
@@ -238,16 +246,17 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
           </div>}
           {section === 'Import' && (browser.privateWindow ? <p>Import is unavailable in private windows.</p> : <>
             <BrowserImport profileId={browser.profileId} workspaces={browser.workspaces} />
-            <h2 className="section-heading">Space backup</h2>
-            <p className="muted">Backup includes the current Space’s links, tab folders, and split layout.</p>
-            <div className="import-file-actions">
+            <details className="import-disclosure">
+              <summary>Space backup</summary>
+              <div className="import-file-actions">
               <button type="button" className="secondary" onClick={() => { void command('exportSpaceBackup') }}>Back up this Space</button>
               <button type="button" className="secondary" onClick={() => { void command('restoreSpaceBackup') }}>Restore a Space backup</button>
-              <button type="button" className="secondary" onClick={() => { void command('exportWorkspace') }}>Export workspace as bookmarks HTML</button>
-            </div>
+              <button type="button" className="secondary" onClick={() => { void command('exportWorkspace') }}>Export bookmarks HTML</button>
+              </div>
+            </details>
           </>)}
           {section === 'New Tab' && <div className="setting-list">
-            <Setting label="New tab background" detail="Each style follows the light or dark theme for this Profile.">
+            <Setting label="New tab background">
               {select('background', 'New tab background', { match: 'Match theme', black: 'Solid theme', violet: 'Accent wash', forest: 'Forest', midnight: 'Midnight' })}
             </Setting>
             <Setting label="Layout spacing">{select('homeDensity', 'Layout spacing', { relaxed: 'Relaxed', compact: 'Compact' })}</Setting>
@@ -330,6 +339,11 @@ export function Settings({ browser, confirm, section, setSection, goHome }: {
                 }}><Trash2 size={16} /></Tool>
               </article>)}</div>
           </>}
+          {section === 'Profiles' && <div className="setting-list">
+            <Setting label={profile?.name ?? 'Current Profile'} detail="Each Profile has its own browsing data and preferences." />
+            <Setting label="Saved passwords"><button type="button" className="secondary" onClick={() => openPage('passwords')}><KeyRound size={16} /> Manage passwords</button></Setting>
+            <Setting label="Extensions"><button type="button" className="secondary" onClick={() => openPage('extensions')}><Puzzle size={16} /> Manage extensions</button></Setting>
+          </div>}
           {section === 'About' && <div className="setting-list">
             <Setting label="Drew" detail="A Chromium-based desktop browser with workspaces."><span>Version {browser.appVersion}</span></Setting>
             <Setting label="Software updates"><button type="button" className="secondary" onClick={() => { void command('checkForUpdates') }}>Check for updates</button></Setting>

@@ -38,8 +38,12 @@ export async function savePassword(db: Database, account: Account, password: str
 }
 
 export async function importPasswords(db: Database, profile: string, path: string, canSave: () => boolean) {
+  return importLoginEntries(db, profile, passwordRows(await readImportFile(path)), canSave)
+}
+
+export async function importLoginEntries(db: Database, profile: string,
+  { entries, skipped: invalid }: ReturnType<typeof passwordRows>, canSave: () => boolean) {
   await requireEncryption()
-  const { entries, skipped: invalid } = passwordRows(await readImportFile(path))
   let duplicates = 0
   const logins: { origin: string; username: string; encrypted: string }[] = []
   const seen = new Set<string>()

@@ -44,6 +44,30 @@ if (process.isMainFrame) window.addEventListener('wheel', event => {
   ipcRenderer.send('lexn:history-swipe', distance < 0 ? 'back' : 'forward')
 }, { passive: false })
 
+if (process.isMainFrame) ipcRenderer.on('lexn:history-swipe-cue', (_event, direction: unknown, animate: unknown) => {
+  if (direction !== 'back' && direction !== 'forward') return
+  const left = direction === 'back'
+  const host = document.createElement('div')
+  host.setAttribute('aria-hidden', 'true')
+  host.style.cssText = 'all:initial; position:fixed; top:50%; z-index:2147483647; pointer-events:none;'
+  host.style[left ? 'left' : 'right'] = '18px'
+  const badge = document.createElement('span')
+  badge.textContent = left ? '←' : '→'
+  badge.style.cssText = 'display:grid;place-items:center;width:48px;height:48px;border-radius:50%;' +
+    'background:#181820;color:white;border:1px solid #ffffff42;box-shadow:0 6px 24px #0005;font:600 25px system-ui;'
+  host.attachShadow({ mode: 'closed' }).append(badge)
+  document.documentElement.append(host)
+  if (animate && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+    badge.animate([
+      { opacity: 0, transform: 'translateX(' + (left ? '-13px' : '13px') + ') scale(.92)' },
+      { opacity: 1, transform: 'none', offset: .36 },
+      { opacity: 1, offset: .7 },
+      { opacity: 0 },
+    ], { duration: 350, easing: 'cubic-bezier(.2,.7,.25,1)', fill: 'both' })
+  }
+  setTimeout(() => host.remove(), 350)
+})
+
 function visibleInput(input: HTMLInputElement) {
   return !input.disabled && !input.readOnly && input.getClientRects().length > 0 &&
     input.checkVisibility({ opacityProperty: true, visibilityProperty: true })

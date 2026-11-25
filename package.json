@@ -1,7 +1,7 @@
 {
   "name": "drew-browser",
   "productName": "Drew",
-  "version": "0.7.1",
+  "version": "0.7.7",
   "description": "A workspace-oriented desktop browser",
   "author": "Drew contributors",
   "private": true,
@@ -23,7 +23,8 @@
     "dist:mac": "npm run build && electron-builder --mac --arm64 --x64",
     "dist:win": "npm run build && electron-builder --win --x64",
     "dist:mac:arm64": "npm run build && electron-builder --mac --arm64",
-    "dist:mac:x64": "npm run build && electron-builder --mac --x64"
+    "dist:mac:x64": "npm run build && electron-builder --mac --x64",
+    "dist:mac:local": "npm run build && electron-builder --mac --arm64 -c.mac.identity=- -c.mac.hardenedRuntime=false -c.directories.output=release/local"
   },
   "dependencies": {
     "electron-updater": "6.8.11",

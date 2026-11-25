@@ -1,7 +1,7 @@
 export const HOME = 'about:blank'
 export const WINDOW_CAPTION_HEIGHT = 36
 export const SIDEBAR_INSET = 8
-export const SIDEBAR_VERTICAL_GAP = 11
+export const SIDEBAR_VERTICAL_GAP = 8
 export const SIDEBAR_RADIUS = 18
 export const WINDOW_CONTROLS_WIDTH = 138
 export const WINDOW_CONTROLS_INSET = 4
@@ -88,11 +88,14 @@ export type BrowserBrand = 'Chrome' | 'Arc' | 'Dia' | 'Ardia' | 'Opera' | 'Opera
 export interface BrowserImportSource { id: string; label: string; browser: BrowserBrand }
 export interface BrowserImportResult {
   bookmarks: number; visits: number; passwords: number; notes: string[]
+  passwordFallbackProfiles?: { id: string; name: string }[]
   profiles?: { id: string; name: string }[]; favorites?: number; pinned?: number; tabs?: number
 }
-export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords' | 'profiles' | 'profile-folder' | 'profile-markdown'
+export const browserImportItems = ['bookmarks', 'history', 'favorites', 'pinned', 'tabs'] as const
+export type BrowserImportItem = typeof browserImportItems[number]
+export type BrowserImportKind = 'browser' | 'folder' | 'bookmarks' | 'passwords' | 'profile' | 'profiles' | 'profile-folder' | 'profile-markdown'
 
-export interface ProfileExtension { id: string; name: string; version: string; popup: boolean }
+export interface ProfileExtension { id: string; name: string; version: string; popup: boolean; options: boolean }
 export interface SavedLogin { id: string; origin: string; username: string }
 export interface BrowserState {
   appVersion: string
@@ -105,7 +108,7 @@ export interface BrowserState {
   favorites: Favorite[]; canUndoClear: boolean; split: SplitPane[];
   sidebarPreviews: Record<string, {
     favorites: Favorite[]; size: Settings['favoriteSize']; tabs: Tab[]; groups: TabGroup[]
-    settings: Pick<Settings, 'theme' | 'accentColor' | 'accentEnd' | 'topToolbar' | 'keyboardShortcuts'>
+    settings: Pick<Settings, 'theme' | 'accentColor' | 'accentEnd' | 'colorIntensity' | 'topToolbar' | 'keyboardShortcuts'>
   }>
   otherWindowTabs: Tab[]
   workspaceId: string; profileId: string; workspaces: Workspace[]; tabs: Tab[]; groups: TabGroup[];
@@ -141,7 +144,7 @@ export interface Commands {
   removeLogin: [id: string]
   loadExtension: []
   removeExtension: [id: string]
-  runExtension: [id: string]
+  runExtension: [id: string, options?: boolean]
   muteTab: [id: string]
   mediaTab: [id: string]
   pinTab: [id: string]
@@ -178,6 +181,7 @@ export interface Commands {
   removeCookie: [domain: string, path: string, name: string, secure: boolean]
   setShortcut: [action: string, binding: string | null]
   finishWelcome: []
+  startNew: []
   windowAction: [action: 'minimize' | 'toggleMaximize' | 'close']
 }
 export type Shortcut = 'find' | 'command' | 'split' | 'toolbar' | 'browse' | 'address' | 'sidebar' | 'history' | 'bookmarks' | 'downloads' | 'settings'
@@ -193,7 +197,7 @@ export interface Bridge {
   frequent(): Promise<Visit[]>
   cookies(): Promise<SiteCookie[]>
   importSources(): Promise<BrowserImportSource[]>
-  importBrowserData(kind: BrowserImportKind, source?: string, review?: boolean): Promise<BrowserImportResult | null>
+  importBrowserData(kind: BrowserImportKind, source?: string, review?: boolean, includePasswords?: boolean, items?: BrowserImportItem[]): Promise<BrowserImportResult | null>
   layout(rect: ViewRect | PaneRect[] | null): void
   layoutSidebar(width: number, open: boolean, animate: boolean): void
   onState(listener: (state: BrowserState) => void): () => void

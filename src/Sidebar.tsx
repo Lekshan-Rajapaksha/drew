@@ -29,6 +29,9 @@ export function Sidebar(props: SidebarProps) {
   const shift = preview && next ? preview.direction * preview.progress * 100 : 0
   const nextTheme = next?.settings.theme === 'system' ? (systemDark ? 'dark' : 'light') : next?.settings.theme
   const accent = nextTheme && neighbor ? next?.settings.accentColor || themeAccents[nextTheme] || neighbor.accent : undefined
+  const footerPreview = next && nextTheme && accent && preview ? {
+    theme: nextTheme, accent, end: next.settings.accentEnd, intensity: next.settings.colorIntensity, progress: preview.progress, settling: preview.settling,
+  } : undefined
   return <aside className={'sidebar spatial-sidebar' + (collapsed ? ' collapsed' : '') + (compact ? ' compact-sidebar' : '')} inert={collapsed}>
     <div className={'sidebar-carousel' + (preview?.settling ? ' swipe-settling' : '')}>
       <div key={props.space.id} className="sidebar-slide sidebar-swipe-current" style={{ transform: `translateX(${-shift}%)` }}>
@@ -46,7 +49,7 @@ export function Sidebar(props: SidebarProps) {
           chrome={!compact && !next.settings.topToolbar ? <PreviewToolbar url={next.tabs.find(tab => tab.id === neighbor.activeTab)?.url} /> : null} />
       </div>}
     </div>
-    <ProfileStrip browser={browser} space={props.space} page={props.page} open={props.open} switchProfile={props.switchProfile} workspaceEditor={props.workspaceEditor} />
+    <ProfileStrip browser={browser} space={props.space} page={props.page} open={props.open} switchProfile={props.switchProfile} workspaceEditor={props.workspaceEditor} preview={footerPreview} />
     {!compact && <div className="resize-handle" role="separator" aria-label="Sidebar width" aria-orientation="vertical" onPointerDown={resize} />}
   </aside>
 }
@@ -151,9 +154,15 @@ function SidebarPage({ browser, space, active, page, locked, pinPending, pinSide
   </>
 }
 
-function ProfileStrip({ browser, space, page, open, switchProfile, workspaceEditor }: Pick<SidebarProps, 'browser' | 'space' | 'page' | 'open' | 'switchProfile' | 'workspaceEditor'>) {
+function ProfileStrip({ browser, space, page, open, switchProfile, workspaceEditor, preview }: Pick<SidebarProps, 'browser' | 'space' | 'page' | 'open' | 'switchProfile' | 'workspaceEditor'> & {
+  preview?: { theme: string; accent: string; end: string; intensity: BrowserState['settings']['colorIntensity']; progress: number; settling?: boolean }
+}) {
   const [creating, setCreating] = useState(false)
-  return <footer className="spatial-footer">
+  const tint = preview && `color-mix(in srgb, var(--footer-theme-accent), ${preview.end || preview.accent} ${preview.progress * 100}%)`
+  return <footer className="spatial-footer" style={{ '--footer-accent': tint } as CSSProperties}>
+    {preview && <div className={`footer-preview ${preview.theme}${preview.end ? ' has-gradient' : ''}${preview.settling ? ' settling' : ''}`} aria-hidden="true"
+      style={{ opacity: preview.progress, '--ambient': preview.accent, '--ambient-end': preview.end || preview.accent,
+        '--color-intensity': { subtle: 0.45, balanced: 1, vivid: 1.8 }[preview.intensity] } as CSSProperties} />}
     <ServiceRail page={page} open={open} />
     <div className="space-strip">
       <button type="button" className="space-name" title="Edit Space" aria-label="Edit Space" onClick={() => workspaceEditor(space)}><span key={space.id}>{space.icon || space.name}</span></button>

@@ -1,22 +1,22 @@
 <div align="center">
-  <img src="build/icon.png" alt="Drew app icon" width="108" height="108" />
-  <h1>Drew</h1>
+  <img src="src/assets/drew-wordmark.png" alt="Drew logo" width="150" height="150" />
+  <h1>Drew Browser</h1>
   <p><strong>A workspace browser for macOS and Windows.</strong></p>
   <p>Swipe between projects, keep your accounts separate, and put the web first with a floating sidebar.</p>
-  <p><a href="#get-drew">Get Drew</a> · <a href="#screenshots">Screenshots</a> · <a href="#how-drew-is-organized">How Drew works</a> · <a href="#build-and-test">Build and test</a></p>
+  <p><a href="#get-drew"><strong>Download Drew</strong></a> · <a href="#screenshots">Screenshots</a> · <a href="#how-drew-is-organized">How Drew works</a> · <a href="#build-and-test">Build and test</a> · <a href="#support-drew">Support Drew</a></p>
 </div>
-
-## Screenshots
-
-<img src="docs/screenshots/new-tab.png" alt="Drew’s new tab page with the search field, date and time, and vertical sidebar" width="960" />
-
-<img src="docs/screenshots/layouts.png" alt="Drew appearance settings with previews for the floating sidebar, compact sidebar, and top toolbar" width="960" />
-
-Screenshots use a fresh test Profile on macOS.
 
 ## Get Drew
 
-Check [GitHub Releases](https://github.com/Lekshan-Rajapaksha/drew/releases) for published downloads. The project targets Apple Silicon and Intel Macs on macOS 13 or newer, and Windows 10/11 on x64. Apple Silicon has the broadest desktop test coverage. See [release status](#release-status) for signing and platform validation.
+Installers will appear under **Assets** on the [Drew releases page](https://github.com/Lekshan-Rajapaksha/drew/releases) once they’re published.
+
+| Platform | Installer to look for |
+| --- | --- |
+| macOS 13 or newer, Apple Silicon | `Drew-<version>-arm64.dmg` |
+| macOS 13 or newer, Intel | `Drew-<version>-x64.dmg` |
+| Windows 10 or 11, x64 | `Drew-Setup-<version>-x64.exe` |
+
+See [release status](#release-status) for signing and platform validation.
 
 You can also build from source with [Node.js](https://nodejs.org/) 24.15 or newer. On macOS, install Xcode Command Line Tools for the native trackpad monitor.
 
@@ -29,13 +29,21 @@ npm run dev
 
 Fresh Profiles start with **Personal** in True Black and **Work** in Light. Open **Settings → Appearance** to change the navigation layout, theme, gradient, and motion preferences.
 
+## Screenshots
+
+<img src="docs/screenshots/new-tab.png" alt="Drew’s new tab page with the search field, date and time, and vertical sidebar" width="960" />
+
+<img src="docs/screenshots/layouts.png" alt="Drew appearance settings with previews for the floating sidebar, compact sidebar, and top toolbar" width="960" />
+
+Screenshots use a fresh test Profile on macOS.
+
 ## How Drew is organized
 
 | Feature | How it works |
 | --- | --- |
 | **Floating sidebar** | Move to the left edge to reveal the sidebar over the page. Pin it when you want the webpage to reserve room for it. You can also pick a compact sidebar or a horizontal toolbar. |
 | **Spaces and Profiles** | A Space holds the tabs, folders and split layout for a project. A Profile owns cookies, logins, permissions, history, Favorites, and browser settings. Give a client a dedicated Profile or use several Spaces with the same account. |
-| **Favorites, Pinned, and Today** | Add websites to the Favorites grid and drag to reorder. Pin long-lived tabs and organize them in nested folders. Today tabs can auto-archive, and the archive supports search, batch restore, and **Undo Clear**. |
+| **Favorites, Pinned, and Today** | Add websites to the Favorites grid and drag to reorder. Drew shows a favicon when the website provides one. Pin long-lived tabs and organize them in nested folders. Today tabs can auto-archive, and the archive supports search, batch restore, and **Undo Clear**. |
 | **Command Bar** | Search the web, switch tabs, jump to browser tools, and run actions such as Split View, Save as PDF, and Export Workspace. |
 | **Split View and previews** | Browse with up to four resizable panes. Press Left or Right on a focused divider to adjust it, or hold Shift for a larger step. Link previews show their destination and can open in a full tab. |
 | **Window recovery** | Quit and reopen Drew to restore open windows, tabs, and split layouts. Same-Profile tabs in other windows are visible under **Other windows**. |
@@ -112,6 +120,12 @@ The desktop suite covers navigation, downloads, Profile isolation, window and sp
 Run `npm run release:signed` on the target OS with production credentials. macOS requires a Developer ID Application identity and notarization credentials. Windows requires Authenticode signing and `DREW_WINDOWS_PUBLISHER`. Set `DREW_UPDATE_URL` to the platform’s HTTPS stable release directory. Publish the signed artifacts and blockmaps before publishing the matching update manifest. Verify an installed upgrade, failed-download recovery, default-browser handoff, and Profile retention on both platforms. [Electron Builder update documentation](https://www.electron.build/docs/features/auto-update/)
 
 Public distribution still needs an end-to-end signed update and recovery run. Native Windows and Intel Mac testing, screen readers, DRM, screen sharing, inline PDFs, live account sign-in, and passkeys still need wider compatibility coverage. Extensions have Electron’s unpacked-extension support. Chrome Web Store installation, cross-device sync, automatic credential-capture prompts, and site and download reputation services are outside the current feature set. [Supported extension APIs](https://www.electronjs.org/docs/latest/api/extensions)
+
+## Support Drew
+
+If you use Drew, you can help by [starring the project on GitHub](https://github.com/Lekshan-Rajapaksha/drew), sharing it, or [reporting an issue](https://github.com/Lekshan-Rajapaksha/drew/issues/new).
+
+<!-- Add the maintainer’s verified Buy Me a Coffee link here once it is available. -->
 
 ### Report an issue
 

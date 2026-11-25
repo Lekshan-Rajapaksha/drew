@@ -1,5 +1,5 @@
 import { webUrl } from '../../shared/navigation.js'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { extname, isAbsolute, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -32,6 +32,31 @@ app.setPath('userData', profilePath)
 if (testProfile) app.setPath('downloads', join(testProfile, 'downloads'))
 if (process.platform === 'win32') app.setAppUserModelId('com.lexn.browser')
 app.enableSandbox()
+
+const resetMarker = join(profilePath, '.drew-reset-pending')
+function applyPendingReset() {
+  if ((override && !testProfile) || !existsSync(resetMarker)) return
+  // Keep Electron's active instance lock and user-owned downloads.
+  for (const entry of readdirSync(profilePath)) {
+    if (entry === '.drew-reset-pending' || entry === 'downloads' || entry.startsWith('Singleton')) continue
+    rmSync(join(profilePath, entry), { recursive: true, force: true })
+  }
+  rmSync(resetMarker)
+}
+
+async function startFresh(window: BrowserWindow) {
+  if (override && !testProfile) throw new Error('Reset is unavailable with a custom browser data directory.')
+  const { response } = await dialog.showMessageBox(window, {
+    title: 'Reset Drew', type: 'warning', message: 'Delete all Drew browsing data?',
+    detail: 'This permanently removes every Profile, saved password, bookmark, favorite, tab, cookie, extension, and setting. Files in your Downloads folder are kept. Drew will restart at the welcome screen.',
+    buttons: ['Cancel', 'Delete data and restart'], defaultId: 0, cancelId: 0, noLink: true,
+  })
+  if (response !== 1 || quitting) return
+  writeFileSync(resetMarker, '', { mode: 0o600 })
+  quitting = true
+  app.relaunch()
+  app.exit(0)
+}
 
 const windows = new Map<number, { privateWindow: boolean; browser: BrowserWindow; preview: (url: string) => void; closePreview: (profile: string) => void; changed: () => void; tabs: Tabs }>()
 const profileResets = new Map<string, Promise<void>>()
@@ -224,7 +249,7 @@ function createWindow(initialSpace?: string, initialUrl?: string, sessionId = wi
           shortcut('browse')
           break
         case 'print':
-          tabs.print()
+          void tabs.print().catch(error => tabs.reportPageError(error))
           break
         case 'reload':
           if (current) tabs.action(current, 'reload')
@@ -311,7 +336,7 @@ function createWindow(initialSpace?: string, initialUrl?: string, sessionId = wi
     }, peerTabs, focusWindowTab, records => {
       const owner = [...windows.values()].find(entry => !entry.privateWindow && entry.tabs.managesSavedTabs)?.tabs ?? tabs
       owner.registerImported(records)
-    }, profile => resetProfile(profile, profileResets.has(profile)), clearProfileStorage)
+    }, profile => resetProfile(profile, profileResets.has(profile)), clearProfileStorage, () => startFresh(browser))
   wireKeys(browser.webContents)
   browser.webContents.setWindowOpenHandler(details => {
     if (details.url !== 'about:blank' || browser.webContents.getURL() !== uiUrl) return { action: 'deny' }
@@ -429,6 +454,7 @@ if (!app.requestSingleInstanceLock()) {
     else foreground()
   })
   app.whenReady().then(() => {
+    applyPendingReset()
     registerShellProtocol(protocol)
     if (isMac) app.setAboutPanelOptions({ applicationName: 'Drew', applicationVersion: app.getVersion() })
     Menu.setApplicationMenu(isMac ? Menu.buildFromTemplate([

@@ -4,7 +4,7 @@ import { basename, extname, join } from 'node:path'
 import { app, BrowserWindow, dialog, Notification, session, shell, type View, type DownloadItem, type Session } from 'electron'
 import type { Download, Permission } from '../../shared/model.js'
 import { originOf, webUrl } from '../../shared/navigation.js'
-import { extensionPopup } from './extensions.js'
+import { extensionOptions, extensionPopup } from './extensions.js'
 import type { Database } from './database.js'
 
 const documentTypes = new Set(['.txt', '.csv', '.pdf', '.png', '.jpg', '.jpeg', '.webp', '.gif', '.mp3', '.mp4', '.wav'])
@@ -109,7 +109,7 @@ export class Downloads {
 
   extensions(profile: string) {
     return this.sessionFor(profile).extensions.getAllExtensions().map(extension => ({
-      id: extension.id, name: extension.name, version: extension.version, popup: Boolean(extensionPopup(extension)),
+      id: extension.id, name: extension.name, version: extension.version, popup: Boolean(extensionPopup(extension)), options: Boolean(extensionOptions(extension)),
     }))
   }
 

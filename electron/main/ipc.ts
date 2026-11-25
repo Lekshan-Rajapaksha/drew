@@ -1,7 +1,7 @@
 import { writeFile } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { app, dialog, powerMonitor, shell, type BrowserWindow, type IpcMainEvent, type IpcMainInvokeEvent } from 'electron'
-import { engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type SavedTab, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
+import { browserImportItems, engines, HOME, profileThemes, type ArchivedTab, type SavedLogin, type SavedTab, type Favorite, type PaneRect, type BrowserState, type Bookmark, type Commands, type Folder, type SitePermission, type TabGroup, type Tab } from '../../shared/model.js'
 import { allowedShortcut, defaultShortcut, shortcutActions, shortcutDefinitions, shortcutOverrides } from '../../shared/shortcuts.js'
 import { addressToUrl, originOf, webUrl } from '../../shared/navigation.js'
 import type { Database } from './database.js'
@@ -10,7 +10,8 @@ import type { Tabs } from './tabs.js'
 import { showExtension } from './extensions.js'
 import { detectSources, exportedLinks, readChromium, readImportFile, saveImported, scanChromiumProfiles } from './importData.js'
 import { chromiumProfile, markdownProfiles, saveBrowserProfiles } from './profileImport.js'
-import { copyPassword, importPasswords, savePassword } from './vault.js'
+import { readBrowserPasswords } from './browserPasswords.js'
+import { copyPassword, importLoginEntries, importPasswords, savePassword } from './vault.js'
 import type { Downloads } from './profile.js'
 import { exportSpace, restoreSpace } from './workspaceBackup.js'
 import { checkForDrewUpdates } from './updates.js'
@@ -21,8 +22,8 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads, win
   const localTabs = tabs.list()
   const groups = db.all<TabGroup>('SELECT * FROM tab_groups ORDER BY rowid')
   const previews = new Map(workspaces.map(space => space.profileId ?? space.id).map(id => {
-    const { favoriteSize: size, theme, accentColor, accentEnd, topToolbar, keyboardShortcuts } = db.settings(id)
-    return [id, { size, settings: { theme, accentColor, accentEnd, topToolbar, keyboardShortcuts },
+    const { favoriteSize: size, theme, accentColor, accentEnd, colorIntensity, topToolbar, keyboardShortcuts } = db.settings(id)
+    return [id, { size, settings: { theme, accentColor, accentEnd, colorIntensity, topToolbar, keyboardShortcuts },
       favorites: db.all<Favorite>('SELECT id, url, title, favicon, icon FROM favorites WHERE profileId = ? ORDER BY position, rowid LIMIT 12', id) }] as const
   }))
   const batterySaver = db.settings(profile).batterySaver
@@ -30,7 +31,7 @@ export function browserState(db: Database, tabs: Tabs, downloads: Downloads, win
     privateWindow: downloads.privateWindow,
     batterySaving: batterySaver === 'on' || (batterySaver === 'battery' && powerMonitor.onBatteryPower),
     appVersion: app.getVersion(),
-    welcomePending: db.get('welcomePending', false),
+    welcomePending: tabs.welcomePending,
     windowMaximized: window.isMaximized(),
     passwords: db.all<SavedLogin>('SELECT id, origin, username FROM saved_logins WHERE profileId = ? ORDER BY origin, username', profile),
     workspaceId: tabs.workspaceId, profileId: profile, extensions: downloads.extensions(profile),
@@ -98,6 +99,7 @@ export function bindIpc(
   registerImported: (tabs: SavedTab[]) => void,
   resetProfile: (profile: string) => void,
   clearProfileStorage: (profile: string, clear: () => Promise<void>) => Promise<void>,
+  startFresh: () => Promise<void>,
 ) {
   const state = () => browserState(db, tabs, downloads, window, peerTabs())
   const currentTab = (value: unknown) => {
@@ -197,10 +199,10 @@ export function bindIpc(
       if (!result.canceled && !window.isDestroyed()) await downloads.loadExtension(profile, result.filePaths[0])
     },
     removeExtension: value => downloads.removeExtension(tabs.profileId, required(value, 64)),
-    runExtension: value => {
+    runExtension: (value, options) => {
       const session = downloads.sessionFor(tabs.profileId)
       const extension = session.extensions.getExtension(required(value, 64))
-      if (extension) showExtension(window, session, extension)
+      if (extension) showExtension(window, session, extension, options === true)
     },
     mediaTab: value => tabs.toggleMedia(id(value)),
     muteTab: value => tabs.mute(id(value)),
@@ -226,14 +228,16 @@ export function bindIpc(
       const address = site(url)
       const name = required(title, 120)
       const glyph = text(icon, 12)
+      const favicon = tabs.list().find(tab => tabs.storageFor(tab.workspaceId) === profile && tab.url === address && tab.favicon)?.favicon ?? null
       if (value === null) {
-        db.run(`INSERT INTO favorites (profileId, id, url, title, icon, position)
-          VALUES (?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites WHERE profileId = ?))
-          ON CONFLICT(profileId, url) DO UPDATE SET title = excluded.title, icon = excluded.icon`,
-          profile, randomUUID(), address, name, glyph, profile)
+        db.run(`INSERT INTO favorites (profileId, id, url, title, favicon, icon, position)
+          VALUES (?, ?, ?, ?, ?, ?, (SELECT COALESCE(MAX(position), 0) + 1 FROM favorites WHERE profileId = ?))
+          ON CONFLICT(profileId, url) DO UPDATE SET title = excluded.title, icon = excluded.icon,
+            favicon = COALESCE(excluded.favicon, favorites.favicon)`,
+          profile, randomUUID(), address, name, favicon, glyph, profile)
       } else {
-        db.run('UPDATE favorites SET favicon = CASE WHEN url = ? THEN favicon ELSE NULL END, url = ?, title = ?, icon = ? WHERE profileId = ? AND id = ?',
-          address, address, name, glyph, profile, required(value, 64))
+        db.run('UPDATE favorites SET favicon = COALESCE(?, CASE WHEN url = ? THEN favicon END), url = ?, title = ?, icon = ? WHERE profileId = ? AND id = ?',
+          favicon, address, address, name, glyph, profile, required(value, 64))
       }
     },
     moveFavorite: (value, target) => {
@@ -429,7 +433,11 @@ export function bindIpc(
       else overrides[action] = next
       db.setProfileSetting(profile, 'keyboardShortcuts', JSON.stringify(overrides))
     },
-    finishWelcome: () => { db.set('welcomePending', false) },
+    finishWelcome: () => tabs.finishOnboarding(),
+    startNew: async () => {
+      if (downloads.privateWindow) throw new Error('Reset is unavailable in private windows.')
+      await startFresh()
+    },
     windowAction: action => {
       switch (choice(action, ['minimize', 'toggleMaximize', 'close'])) {
         case 'minimize': window.minimize(); break
@@ -460,9 +468,9 @@ export function bindIpc(
   })
   invoke('lexn:frequent', () => db.frequent(tabs.profileId))
   invoke('lexn:import-sources', async () => (await detectSources()).map(({ id, label, browser }) => ({ id, label, browser })))
-  invoke('lexn:import-browser', async (value, selected, review) => {
+  invoke('lexn:import-browser', async (value, selected, review, includePasswords, items) => {
     if (downloads.privateWindow) throw new Error('Import is unavailable in private windows.')
-    const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords', 'profiles', 'profile-folder', 'profile-markdown'])
+    const kind = choice(value, ['browser', 'folder', 'bookmarks', 'passwords', 'profile', 'profiles', 'profile-folder', 'profile-markdown'])
     const profile = kind === 'passwords' && selected !== undefined ? id(selected) : tabs.profileId
     const passwordProfile = kind === 'passwords' ? db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ? AND profileId IS NULL', profile) : undefined
     if (kind === 'passwords' && !passwordProfile) {
@@ -478,26 +486,69 @@ export function bindIpc(
       })
       return response === 0 && !window.isDestroyed()
     }
-    const saveProfiles = async (profiles: Parameters<typeof saveBrowserProfiles>[1]) => {
+    const saveProfiles = async (profiles: Parameters<typeof saveBrowserProfiles>[1], sources?: Awaited<ReturnType<typeof detectSources>>) => {
+      if (items !== undefined) {
+        if (!Array.isArray(items) || items.length > browserImportItems.length) throw new Error('Invalid browser data selection.')
+        const selected = new Set(items.map(value => choice(value, browserImportItems)))
+        profiles = profiles.map(profile => ({
+          ...profile,
+          bookmarks: selected.has('bookmarks') ? profile.bookmarks : [],
+          history: selected.has('history') ? profile.history : [],
+          favorites: selected.has('favorites') ? profile.favorites : [],
+          pinned: selected.has('pinned') ? profile.pinned : [],
+          tabs: selected.has('tabs') ? profile.tabs : [],
+          spaces: selected.has('pinned') || selected.has('tabs') ? profile.spaces?.map(space => ({
+            ...space, pinned: selected.has('pinned') ? space.pinned : [], tabs: selected.has('tabs') ? space.tabs : [],
+          })) : undefined,
+        }))
+      }
       const summary = profiles.slice(0, 12).map(source => {
         const saved = db.get('browser-import:' + source.key, '')
         const destination = db.one<{ name: string }>('SELECT name FROM workspaces WHERE id = ? AND profileId IS NULL', saved)?.name
         return (destination ? destination + ' (existing Profile)' : source.name + ' (new Profile)') + '\n' +
           source.bookmarks.length + ' bookmarks, ' + source.history.length + ' history entries, ' +
-          source.favorites.length + ' Favorites, ' + source.pinned.length + ' pinned tabs, ' + source.tabs.length + ' open tabs'
+          source.favorites.length + ' Favorites, ' + (source.pinned.length + (source.spaces ?? []).reduce((total, space) => total + space.pinned.length, 0)) + ' pinned tabs, ' +
+          (source.tabs.length + (source.spaces ?? []).reduce((total, space) => total + space.tabs.length, 0)) + ' open tabs' +
+          (source.spaces?.length ? ', ' + source.spaces.length + ' Spaces' : '')
       }).join('\n\n')
       if (!await confirmImport(summary + (profiles.length > 12 ? '\n\nAdditional Profiles: ' + (profiles.length - 12) : '') +
-          '\n\nDuplicates are skipped. Passwords are imported separately.')) return null
+          '\n\nDuplicates are skipped.' + (includePasswords === true && sources ? ' Drew will request access to saved passwords where supported.' : ' Passwords can be imported separately.'))) return null
       const { results, createdTabs } = saveBrowserProfiles(db, profiles)
       registerImported(createdTabs)
       changed()
-      return results
+      if (includePasswords !== true || !sources || review !== true) return results
+      const passwordFallbackProfiles: typeof results.profiles = []
+      for (let index = 0; index < sources.length; index++) {
+        if (window.isDestroyed()) break
+        const target = results.profiles[index]
+        try {
+          const sourcePasswords = await readBrowserPasswords(sources[index])
+          if (!sourcePasswords.entries.length || sourcePasswords.skipped) passwordFallbackProfiles.push(target)
+          if (!sourcePasswords.entries.length) continue
+          const saved = await importLoginEntries(db, target.id, sourcePasswords, () => !window.isDestroyed())
+          if (saved) {
+            results.passwords += saved.passwords
+            results.notes.push(...saved.notes.map(note => target.name + ' · ' + note))
+          }
+        } catch {
+          if (!passwordFallbackProfiles.includes(target)) passwordFallbackProfiles.push(target)
+          results.notes.push(target.name + ' · Direct password import was unavailable. Choose its password CSV.')
+        }
+      }
+      if (!window.isDestroyed()) changed()
+      return { ...results, passwordFallbackProfiles }
+    }
+    if (kind === 'profile') {
+      const sourceId = text(selected, 256)
+      const source = (await detectSources()).find(item => item.id === sourceId)
+      if (!source) throw new Error('That browser Profile is unavailable.')
+      return saveProfiles([await chromiumProfile(source)], [source])
     }
     if (kind === 'profiles') {
       const browser = brand()
       const sources = (await detectSources()).filter(source => source.browser === browser)
       if (!sources.length) throw new Error('No local Profiles were found for this browser.')
-      return saveProfiles(await Promise.all(sources.map(chromiumProfile)))
+      return saveProfiles(await Promise.all(sources.map(chromiumProfile)), sources)
     }
     let path: string
     if (kind === 'browser') {
@@ -519,7 +570,7 @@ export function bindIpc(
     if (kind === 'profile-folder') {
       const sources = await scanChromiumProfiles(path, brand())
       if (!sources.length) throw new Error('Choose a Chromium Profile folder or its User Data folder.')
-      return saveProfiles(await Promise.all(sources.map(chromiumProfile)))
+      return saveProfiles(await Promise.all(sources.map(chromiumProfile)), sources)
     }
     if (kind === 'profile-markdown') {
       const profiles = markdownProfiles(await readImportFile(path), brand())

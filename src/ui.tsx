@@ -1,22 +1,11 @@
-import { useId, type ReactNode } from 'react'
+import { type ReactNode } from 'react'
 import { Globe2, X } from 'lucide-react'
 import type { Tab } from '../shared/model'
 import { webUrl } from '../shared/navigation'
 import wordmark from './assets/drew-wordmark.png'
 
 export function Wordmark({ decorative = false }: { decorative?: boolean }) {
-  const matte = useId()
-  return <>
-    <svg className="wordmark-filter" aria-hidden="true" width="0" height="0">
-      <filter id={matte} colorInterpolationFilters="sRGB">
-        <feColorMatrix type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  .2126 .7152 .0722 0 0" />
-        <feComponentTransfer result="matte"><feFuncA type="linear" slope={29} intercept={-.7} /></feComponentTransfer>
-        <feComposite in="SourceGraphic" in2="matte" operator="in" />
-      </filter>
-    </svg>
-    <img className="drew-wordmark" src={wordmark} alt={decorative ? '' : 'Drew'}
-      width={720} height={236} style={{ filter: `url(#${matte}) var(--wordmark-tone, opacity(1))` }} />
-  </>
+  return <img className="drew-wordmark" src={wordmark} alt={decorative ? '' : 'Drew'} width={320} height={320} />
 }
 
 export function Favicon({ tab, fallback = <Globe2 className="fallback-icon" size={15} /> }: {
